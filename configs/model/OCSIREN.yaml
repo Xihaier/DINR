@@ -1,0 +1,36 @@
+_target_: src.models.modelmodule.OCINRTraining
+
+optimizer:
+  _target_: torch.optim.AdamW
+  _partial_: true
+  lr: 1e-3
+  weight_decay: 1e-5
+
+scheduler:
+  _target_: torch.optim.lr_scheduler.ReduceLROnPlateau
+  _partial_: true
+  mode: min
+  factor: 0.1
+  patience: 10
+
+criterion:
+  _target_: torch.nn.MSELoss
+
+net:
+  _target_: src.models.components.OC_SIRENNet.OCSIREN
+  input_dim: 2
+  hidden_dim: 256
+  output_dim: 1
+  num_layers: 5
+  omega_0: 30.0
+  omega_0_hidden: 30.0
+  dropout_rate: 0.0
+  block_type: "mlp"
+  fusion_mode: "cat"
+  time_embed_dim: 64
+  num_steps: 12
+  total_time: 1.0
+  ot_lambda: 0.001
+  final_activation: null
+
+compile: false
