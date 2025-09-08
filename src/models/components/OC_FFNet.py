@@ -6,7 +6,6 @@ from typing import Optional, Tuple, Literal
 import torch
 import torch.nn as nn
 import numpy as np
-import math
 
 
 class FourierFeatureMapping(nn.Module):
@@ -77,141 +76,81 @@ class FourierFeatureMapping(nn.Module):
         return torch.cat([torch.sin(x_proj), torch.cos(x_proj)], dim=-1)
 
 
-class TimeEmbed(nn.Module):
-    """Sinusoidal time embeddings for diffusion-style conditioning."""
-    
-    def __init__(self, dim: int) -> None:
-        """Initialize time embedding module.
-        
-        Args:
-            dim: Dimensionality of the time embedding
-        """
-        super().__init__()
-        self.dim = dim
-        
-    def forward(self, t: torch.Tensor) -> torch.Tensor:
-        """Compute sinusoidal time embeddings.
-        
-        Args:
-            t: Time tensor of shape (B,) or scalar
-            
-        Returns:
-            Time embeddings of shape (B, dim)
-        """
-        half_dim = self.dim // 2
-        freqs = torch.exp(
-            -math.log(10000) * torch.arange(half_dim, dtype=torch.float32) / half_dim
-        ).to(t.device)
-        
-        args = t.float().unsqueeze(1) * freqs.unsqueeze(0)
-        embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
-        
-        if self.dim % 2 != 0:
-            embedding = torch.cat([embedding, torch.zeros_like(embedding[:, :1])], dim=-1)
-            
-        return embedding
-
-
-class FiLMLayer(nn.Module):
-    """Feature-wise Linear Modulation (FiLM) layer."""
-
-    def __init__(
-        self,
-        time_dim: int,
-        feature_dim: int,
-        activation: nn.Module = nn.SiLU()
-    ) -> None:
-        """Initialize the FiLM layer.
-        
-        Args:
-            time_dim: Dimensionality of the time input
-            feature_dim: Dimensionality of the features to modulate
-            activation: Activation function for the MLP
-        """
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(time_dim, feature_dim * 2),
-            activation
-        )
-        
-    def forward(self, features: torch.Tensor, time_cond: torch.Tensor) -> torch.Tensor:
-        """Apply FiLM modulation.
-        
-        Args:
-            features: Input features of shape (B, D)
-            time_cond: Time conditioning of shape (B, T_dim)
-            
-        Returns:
-            Modulated features of shape (B, D)
-        """
-        gamma, beta = self.net(time_cond).chunk(2, dim=-1)
-        return (1 + gamma) * features + beta
-
-
 class MLPBlock(nn.Module):
-    """Basic MLP block with FiLM conditioning."""
+    """Basic MLP block for ODE dynamics."""
     
     def __init__(
         self,
         dim: int,
-        time_dim: int,
         dropout_rate: float,
-        activation: nn.Module,
-        use_film: bool
+        activation: nn.Module
     ) -> None:
-        super().__init__()
-        self.use_film = use_film
+        """Initialize MLP block.
         
-        self.norm = nn.LayerNorm(dim, elementwise_affine=not use_film)
-        self.activation = activation
+        Args:
+            dim: Feature dimension
+            dropout_rate: Dropout rate
+            activation: Activation function
+        """
+        super().__init__()
+        
+        self.norm = nn.LayerNorm(dim)
         self.linear = nn.Linear(dim, dim)
+        self.activation = activation
         self.dropout = nn.Dropout(dropout_rate)
         
-        if use_film:
-            self.film = FiLMLayer(time_dim, dim, activation)
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass through MLP block.
+        
+        Args:
+            x: Input features
             
-    def forward(self, x: torch.Tensor, time_cond: torch.Tensor) -> torch.Tensor:
-        x_norm = self.norm(x)
-        if self.use_film:
-            x_norm = self.film(x_norm, time_cond)
-            
-        out = self.linear(x_norm)
+        Returns:
+            Output features
+        """
+        out = self.norm(x)
+        out = self.linear(out)
         out = self.activation(out)
         out = self.dropout(out)
         return out
 
 
 class ResidualBlock(nn.Module):
-    """Residual block with FiLM conditioning."""
+    """Residual block for ODE dynamics."""
     
     def __init__(
         self,
         dim: int,
-        time_dim: int,
         dropout_rate: float,
-        activation: nn.Module,
-        use_film: bool
+        activation: nn.Module
     ) -> None:
+        """Initialize residual block.
+        
+        Args:
+            dim: Feature dimension
+            dropout_rate: Dropout rate
+            activation: Activation function
+        """
         super().__init__()
-        self.use_film = use_film
         
-        self.norm = nn.LayerNorm(dim, elementwise_affine=not use_film)
-        self.activation = activation
-        self.dropout = nn.Dropout(dropout_rate)
-        
+        self.norm = nn.LayerNorm(dim)
         self.linear1 = nn.Linear(dim, dim)
         self.linear2 = nn.Linear(dim, dim)
-        
-        if self.use_film:
-            self.film = FiLMLayer(time_dim, dim, activation)
+        self.activation = activation
+        self.dropout = nn.Dropout(dropout_rate)
 
-    def forward(self, x: torch.Tensor, time_cond: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass through residual block.
+        
+        Args:
+            x: Input features
+            
+        Returns:
+            Output features with residual connection
+        """
         identity = x
         
         out = self.norm(x)
-        if self.use_film:
-            out = self.film(out, time_cond)
-            
         out = self.linear1(out)
         out = self.activation(out)
         out = self.dropout(out)
@@ -223,7 +162,7 @@ class ResidualBlock(nn.Module):
 
 
 class ODEFunc(nn.Module):
-    """ODE dynamics function f(z, t)."""
+    """ODE dynamics function f(z, t) with concatenation-based time conditioning."""
     
     def __init__(
         self,
@@ -231,63 +170,63 @@ class ODEFunc(nn.Module):
         num_layers: int,
         dropout_rate: float,
         activation: nn.Module,
-        block_type: Literal["mlp", "residual"],
-        fusion_mode: Literal["cat", "film", "film_time_embed"],
-        time_embed_dim: int
+        block_type: Literal["mlp", "residual"] = "residual"
     ) -> None:
+        """Initialize ODE function.
+        
+        Args:
+            dim: Feature dimension
+            num_layers: Number of layers
+            dropout_rate: Dropout rate
+            activation: Activation function
+            block_type: Type of block ("mlp" or "residual")
+        """
         super().__init__()
-        self.fusion_mode = fusion_mode
-
-        is_concat_mode = fusion_mode == "cat"
-        use_film_in_block = fusion_mode in ["film", "film_time_embed"]
-
-        block_dim = dim + 1 if is_concat_mode else dim
-        self.output_proj = nn.Linear(block_dim, dim) if is_concat_mode else nn.Identity()
-
-        if fusion_mode == "film_time_embed":
-            self.time_embed = TimeEmbed(time_embed_dim)
-            time_cond_dim = time_embed_dim
-        elif fusion_mode == "film":
-            self.time_embed = None
-            time_cond_dim = 1
-        else:  # "cat"
-            self.time_embed = None
-            time_cond_dim = 0  # Not used
-
-        Block = {"mlp": MLPBlock, "residual": ResidualBlock}[block_type]
-
+        
+        # Input dimension includes time (dim + 1)
+        block_dim = dim + 1
+        
+        # Choose block type
+        Block = MLPBlock if block_type == "mlp" else ResidualBlock
+        
+        # Build layers
         self.layers = nn.ModuleList([
             Block(
                 dim=block_dim,
-                time_dim=time_cond_dim,
                 dropout_rate=dropout_rate,
-                activation=activation,
-                use_film=use_film_in_block
+                activation=activation
             ) for _ in range(num_layers)
         ])
+        
+        # Output projection to remove time dimension
+        self.output_proj = nn.Linear(block_dim, dim)
 
     def forward(self, x: torch.Tensor, t: float) -> torch.Tensor:
-        if self.fusion_mode == "cat":
-            t_vec = torch.full(
-                (x.shape[0], 1), t, device=x.device, dtype=x.dtype
-            )
-            x = torch.cat([x, t_vec], dim=1)
-            time_cond = None
-        else:
-            t_tensor = torch.full((x.shape[0],), t, device=x.device, dtype=x.dtype)
-            if self.fusion_mode == "film_time_embed":
-                time_cond = self.time_embed(t_tensor)
-            else:  # "film"
-                time_cond = t_tensor.unsqueeze(1)
+        """Forward pass through ODE function.
+        
+        Args:
+            x: State tensor of shape (B, D)
+            t: Time scalar
             
+        Returns:
+            Time derivative dz/dt of shape (B, D)
+        """
+        # Concatenate time to features
+        t_vec = torch.full(
+            (x.shape[0], 1), t, device=x.device, dtype=x.dtype
+        )
+        x = torch.cat([x, t_vec], dim=1)
+        
+        # Pass through layers
         for layer in self.layers:
-            x = layer(x, time_cond)
+            x = layer(x)
             
+        # Project back to original dimension
         return self.output_proj(x)
 
 
 class OCFourierFeatureNetwork(nn.Module):
-    """Optimal Control-regularized FourierFeatureNetwork."""
+    """Optimal Control-regularized Fourier Feature Network with concatenation-only time conditioning."""
     
     VALID_ACTIVATIONS = {
         "ReLU": nn.ReLU(),
@@ -311,10 +250,8 @@ class OCFourierFeatureNetwork(nn.Module):
         num_layers: int,
         dropout_rate: float,
         activation: str,
-        block_type: Literal["mlp", "residual"],
-        fusion_mode: Literal["cat", "film", "film_time_embed"],
-        time_embed_dim: int,
-        num_steps: int,
+        block_type: Literal["mlp", "residual"] = "residual",
+        num_steps: int = 10,
         total_time: float = 1.0,
         ot_lambda: float = 1.0,
         sigma: float = 1.0,
@@ -327,6 +264,10 @@ class OCFourierFeatureNetwork(nn.Module):
             mapping_size: Size of Fourier feature mapping
             hidden_dim: Width of hidden layers
             output_dim: Number of output dimensions
+            num_layers: Number of layers in ODE function
+            dropout_rate: Dropout rate
+            activation: Activation function name
+            block_type: Type of block ("mlp" or "residual")
             num_steps: Number of discretization steps for the ODE
             total_time: Total integration time T for the ODE
             ot_lambda: Weight for the optimal transport regularization
@@ -361,7 +302,14 @@ class OCFourierFeatureNetwork(nn.Module):
         else:
             self.input_proj = nn.Identity()
 
-        self.ode_func = ODEFunc(dim=hidden_dim, num_layers=num_layers, dropout_rate=dropout_rate, activation=self._get_activation(activation), block_type=block_type, fusion_mode=fusion_mode, time_embed_dim=time_embed_dim)
+        # ODE function with concatenation-only time conditioning
+        self.ode_func = ODEFunc(
+            dim=hidden_dim,
+            num_layers=num_layers,
+            dropout_rate=dropout_rate,
+            activation=self._get_activation(activation),
+            block_type=block_type
+        )
                  
         # Output projection
         output_layers = [nn.Linear(hidden_dim, output_dim)]
@@ -379,14 +327,16 @@ class OCFourierFeatureNetwork(nn.Module):
             )
         return cls.VALID_ACTIVATIONS[activation_name]
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """Forward pass of the OC-FourierFeatureNetwork.
         
         Args:
             x: Input coordinates of shape (batch_size, input_dim)
             
         Returns:
-            Network output of shape (batch_size, output_dim)
+            Tuple of (network_output, ot_regularization_term)
+            - network_output: shape (batch_size, output_dim)
+            - ot_regularization_term: scalar tensor
         """
         # Set initial state z(0) = phi(x)
         z = self.fourier_features(x)
@@ -398,7 +348,7 @@ class OCFourierFeatureNetwork(nn.Module):
         for i in range(self.num_steps):
             t = i * dt
             v = self.ode_func(z, t)
-            # ot_accum = ot_accum + v.pow(2).sum(dim=-1).mean()
+            # Accumulate optimal transport regularization
             ot_accum = ot_accum + v.pow(2).mean()
             z = z + dt * v
 
@@ -421,56 +371,42 @@ class OCFourierFeatureNetwork(nn.Module):
 
 
 def _test():
-    """Run tests for the OC-FourierFeatureNetwork network."""
+    """Run tests for the OC-FourierFeatureNetwork."""
+    print("Testing OC-FourierFeatureNetwork with concatenation-only time conditioning...")
+    
     # Network parameters
-    input_dim = 3
+    input_dim = 2
     mapping_size = 256
     hidden_dim = 256
-    num_steps = 10
     output_dim = 1
-    sigma = 10.0
-    final_activation = None
     num_layers = 3
     dropout_rate = 0.1
     activation = "GELU"
-    block_type = "residual"
-    fusion_mode = "film_time_embed"
-    time_embed_dim = 64
+    num_steps = 10
+    sigma = 10.0
+    final_activation = None
     
-    # Base ODE config for sweepable hyperparameters
-    base_ode_config = {
-        "num_layers": 3,
-        "dropout_rate": 0.1,
-        "activation": "GELU",
-        "block_type": "residual",
-        "fusion_mode": "film_time_embed",
-        "time_embed_dim": 64
-    }
-
+    # Test configurations
     configs = {
-        "Default (film_time_embed, residual)": base_ode_config,
-        "FiLM with plain time": {**base_ode_config, "fusion_mode": "film"},
-        "MLP Blocks": {**base_ode_config, "block_type": "mlp"},
-        "Concat Fallback": {**base_ode_config, "fusion_mode": "cat"}
+        "MLP Blocks": {"block_type": "mlp"},
+        "Residual Blocks": {"block_type": "residual"}
     }
 
-    for name, ode_config in configs.items():
+    for name, config in configs.items():
         print(f"\n--- Testing: {name} ---")
         
         model = OCFourierFeatureNetwork(
             input_dim=input_dim,
             mapping_size=mapping_size,
             hidden_dim=hidden_dim,
-            num_steps=num_steps,
             output_dim=output_dim,
-            sigma=sigma,
-            final_activation=final_activation,
             num_layers=num_layers,
             dropout_rate=dropout_rate,
             activation=activation,
-            block_type=block_type,
-            fusion_mode=fusion_mode,
-            time_embed_dim=time_embed_dim
+            block_type=config["block_type"],
+            num_steps=num_steps,
+            sigma=sigma,
+            final_activation=final_activation
         )
 
         batch_size = 16
@@ -483,17 +419,23 @@ def _test():
         print(f"  Input dim: {input_dim}")
         print(f"  Mapping size: {mapping_size}")
         print(f"  Hidden dim: {hidden_dim}")
-        print(f"  Num steps (M): {num_steps}")
         print(f"  Output dim: {output_dim}")
-        print(f"  ODE Config: {ode_config}")
+        print(f"  Num layers: {num_layers}")
+        print(f"  Num steps (M): {num_steps}")
+        print(f"  Block type: {config['block_type']}")
         print(f"\nParameters:")
         print(f"  Trainable: {trainable_params:,}")
         print(f"  Total: {total_params:,}")
         print(f"\nShapes:")
         print(f"  Input: {x.shape}")
         print(f"  Output: {y.shape}")
-        assert y.shape == (batch_size, output_dim)
         print(f"  OT Reg value: {ot_reg.item():.4f}")
+        
+        # Verify output shape
+        assert y.shape == (batch_size, output_dim), f"Expected {(batch_size, output_dim)}, got {y.shape}"
+        assert ot_reg.numel() == 1, f"OT regularization should be scalar, got shape {ot_reg.shape}"
+        
+        print("✓ Test passed!")
 
 
 if __name__ == "__main__":

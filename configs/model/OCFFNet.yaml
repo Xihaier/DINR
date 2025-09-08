@@ -26,8 +26,6 @@ net:
   dropout_rate: 0.5
   activation: "GELU"
   block_type: "residual"
-  fusion_mode: "cat"
-  time_embed_dim: 128
   num_steps: 12
   total_time: 1.0
   ot_lambda: 0.001

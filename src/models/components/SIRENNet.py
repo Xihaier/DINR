@@ -174,7 +174,7 @@ def _test() -> None:
     """Test SIREN network implementation."""
     # Network parameters
     params = {
-        "input_dim": 3,
+        "input_dim": 2,
         "hidden_dim": 256,
         "output_dim": 1,
         "num_layers": 7,

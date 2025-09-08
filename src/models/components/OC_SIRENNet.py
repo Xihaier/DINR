@@ -8,79 +8,8 @@ import torch.nn as nn
 import math
 
 
-class TimeEmbed(nn.Module):
-    """Sinusoidal time embeddings for diffusion-style conditioning."""
-    
-    def __init__(self, dim: int) -> None:
-        """Initialize time embedding module.
-        
-        Args:
-            dim: Dimensionality of the time embedding
-        """
-        super().__init__()
-        self.dim = dim
-        
-    def forward(self, t: torch.Tensor) -> torch.Tensor:
-        """Compute sinusoidal time embeddings.
-        
-        Args:
-            t: Time tensor of shape (B,) or scalar
-            
-        Returns:
-            Time embeddings of shape (B, dim)
-        """
-        half_dim = self.dim // 2
-        freqs = torch.exp(
-            -math.log(10000) * torch.arange(half_dim, dtype=torch.float32) / half_dim
-        ).to(t.device)
-        
-        args = t.float().unsqueeze(1) * freqs.unsqueeze(0)
-        embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
-        
-        if self.dim % 2 != 0:
-            embedding = torch.cat([embedding, torch.zeros_like(embedding[:, :1])], dim=-1)
-            
-        return embedding
-
-
-class FiLMLayer(nn.Module):
-    """Feature-wise Linear Modulation (FiLM) layer."""
-
-    def __init__(
-        self,
-        time_dim: int,
-        feature_dim: int,
-        activation: nn.Module = nn.SiLU()
-    ) -> None:
-        """Initialize the FiLM layer.
-        
-        Args:
-            time_dim: Dimensionality of the time input
-            feature_dim: Dimensionality of the features to modulate
-            activation: Activation function for the MLP
-        """
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(time_dim, feature_dim * 2),
-            activation
-        )
-        
-    def forward(self, features: torch.Tensor, time_cond: torch.Tensor) -> torch.Tensor:
-        """Apply FiLM modulation.
-        
-        Args:
-            features: Input features of shape (B, D)
-            time_cond: Time conditioning of shape (B, T_dim)
-            
-        Returns:
-            Modulated features of shape (B, D)
-        """
-        gamma, beta = self.net(time_cond).chunk(2, dim=-1)
-        return (1 + gamma) * features + beta
-
-
 class SIRENLayer(nn.Module):
-    """SIREN layer with sinusoidal activation function and optional FiLM conditioning.
+    """SIREN layer with sinusoidal activation function.
     
     Attributes:
         input_dim (int): Number of input features
@@ -88,8 +17,6 @@ class SIRENLayer(nn.Module):
         omega_0 (float): Angular frequency factor
         is_first (bool): Whether this is the first layer
         linear (nn.Linear): Linear transformation layer
-        use_film (bool): Whether to use FiLM conditioning
-        film (FiLMLayer): FiLM layer for time conditioning
     """
     
     def __init__(
@@ -97,9 +24,7 @@ class SIRENLayer(nn.Module):
         input_dim: int,
         output_dim: int,
         omega_0: float = 30.0,
-        is_first: bool = False,
-        time_dim: int = 0,
-        use_film: bool = False
+        is_first: bool = False
     ) -> None:
         """Initialize SIREN layer.
         
@@ -108,8 +33,6 @@ class SIRENLayer(nn.Module):
             output_dim: Number of output features
             omega_0: Angular frequency factor
             is_first: Whether this is the first layer
-            time_dim: Dimensionality of time conditioning (if using FiLM)
-            use_film: Whether to use FiLM conditioning
         """
         super().__init__()
         
@@ -117,13 +40,9 @@ class SIRENLayer(nn.Module):
         self.output_dim = output_dim
         self.omega_0 = omega_0
         self.is_first = is_first
-        self.use_film = use_film
         
         self.linear = nn.Linear(input_dim, output_dim)
         self.init_weights()
-        
-        if use_film and time_dim > 0:
-            self.film = FiLMLayer(time_dim, output_dim)
 
     def init_weights(self) -> None:
         """Initialize weights using uniform distribution."""
@@ -137,128 +56,104 @@ class SIRENLayer(nn.Module):
                 limit = math.sqrt(6 / self.input_dim) / self.omega_0
                 self.linear.weight.uniform_(-limit, limit)
 
-    def forward(self, x: torch.Tensor, time_cond: Optional[torch.Tensor] = None) -> torch.Tensor:
-        """Forward pass with sine activation and optional FiLM conditioning.
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass with sine activation.
         
         Args:
             x: Input tensor
-            time_cond: Optional time conditioning tensor for FiLM
             
         Returns:
             Output tensor after sinusoidal activation
         """
-        out = self.linear(x)
-        
-        if self.use_film and time_cond is not None:
-            out = self.film(out, time_cond)
-            
-        return torch.sin(self.omega_0 * out)
+        return torch.sin(self.omega_0 * self.linear(x))
 
 
 class SIRENBlock(nn.Module):
-    """SIREN block with optional FiLM conditioning for ODE dynamics."""
+    """Basic SIREN block for ODE dynamics."""
     
     def __init__(
         self,
         dim: int,
-        time_dim: int,
         omega_0: float,
-        use_film: bool,
         dropout_rate: float = 0.0
     ) -> None:
         """Initialize SIREN block.
         
         Args:
             dim: Feature dimension
-            time_dim: Time conditioning dimension
             omega_0: Angular frequency factor
-            use_film: Whether to use FiLM conditioning
             dropout_rate: Dropout rate (applied after activation)
         """
         super().__init__()
-        self.use_film = use_film
         
         self.siren_layer = SIRENLayer(
             input_dim=dim,
             output_dim=dim,
             omega_0=omega_0,
-            is_first=False,
-            time_dim=time_dim,
-            use_film=use_film
+            is_first=False
         )
         
         self.dropout = nn.Dropout(dropout_rate) if dropout_rate > 0 else nn.Identity()
         
-    def forward(self, x: torch.Tensor, time_cond: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass through SIREN block.
         
         Args:
             x: Input features
-            time_cond: Optional time conditioning
             
         Returns:
             Output features
         """
-        out = self.siren_layer(x, time_cond)
+        out = self.siren_layer(x)
         return self.dropout(out)
 
 
 class SIRENResidualBlock(nn.Module):
-    """SIREN residual block with optional FiLM conditioning."""
+    """SIREN residual block for ODE dynamics."""
     
     def __init__(
         self,
         dim: int,
-        time_dim: int,
         omega_0: float,
-        use_film: bool,
         dropout_rate: float = 0.0
     ) -> None:
         """Initialize SIREN residual block.
         
         Args:
             dim: Feature dimension
-            time_dim: Time conditioning dimension
             omega_0: Angular frequency factor
-            use_film: Whether to use FiLM conditioning
             dropout_rate: Dropout rate
         """
         super().__init__()
-        self.use_film = use_film
         
         self.siren1 = SIRENLayer(
             input_dim=dim,
             output_dim=dim,
             omega_0=omega_0,
-            is_first=False,
-            time_dim=time_dim,
-            use_film=use_film
+            is_first=False
         )
         
         self.siren2 = SIRENLayer(
             input_dim=dim,
             output_dim=dim,
             omega_0=omega_0,
-            is_first=False,
-            time_dim=0,  # Only apply FiLM to first layer in residual block
-            use_film=False
+            is_first=False
         )
         
         self.dropout = nn.Dropout(dropout_rate) if dropout_rate > 0 else nn.Identity()
 
-    def forward(self, x: torch.Tensor, time_cond: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass through SIREN residual block.
         
         Args:
             x: Input features
-            time_cond: Optional time conditioning
             
         Returns:
             Output features with residual connection
         """
         identity = x
         
-        out = self.siren1(x, time_cond)
+        out = self.siren1(x)
         out = self.dropout(out)
         
         out = self.siren2(out)
@@ -268,65 +163,44 @@ class SIRENResidualBlock(nn.Module):
 
 
 class ODEFunc(nn.Module):
-    """ODE dynamics function f(z, t) using SIREN blocks."""
+    """ODE dynamics function f(z, t) using SIREN blocks with concatenation-based time conditioning."""
     
     def __init__(
         self,
         dim: int,
         num_layers: int,
-        omega_0: float,
         omega_0_hidden: float,
         dropout_rate: float,
-        block_type: Literal["mlp", "residual"],
-        fusion_mode: Literal["cat", "film", "film_time_embed"],
-        time_embed_dim: int
+        block_type: Literal["mlp", "residual"] = "residual"
     ) -> None:
         """Initialize SIREN-based ODE function.
         
         Args:
             dim: Feature dimension
             num_layers: Number of SIREN layers
-            omega_0: First layer frequency factor
             omega_0_hidden: Hidden layer frequency factor
             dropout_rate: Dropout rate
             block_type: Type of block ("mlp" or "residual")
-            fusion_mode: How to incorporate time ("cat", "film", "film_time_embed")
-            time_embed_dim: Dimension of time embeddings
         """
         super().__init__()
-        self.fusion_mode = fusion_mode
-
-        is_concat_mode = fusion_mode == "cat"
-        use_film_in_block = fusion_mode in ["film", "film_time_embed"]
-
-        block_dim = dim + 1 if is_concat_mode else dim
-        self.output_proj = nn.Linear(block_dim, dim) if is_concat_mode else nn.Identity()
-
-        if fusion_mode == "film_time_embed":
-            self.time_embed = TimeEmbed(time_embed_dim)
-            time_cond_dim = time_embed_dim
-        elif fusion_mode == "film":
-            self.time_embed = None
-            time_cond_dim = 1
-        else:  # "cat"
-            self.time_embed = None
-            time_cond_dim = 0  # Not used
+        
+        # Input dimension includes time (dim + 1)
+        block_dim = dim + 1
+        
+        # Choose block type
+        Block = SIRENResidualBlock if block_type == "residual" else SIRENBlock
 
         # Build SIREN layers
-        if block_type == "residual":
-            Block = SIRENResidualBlock
-        else:  # "mlp"
-            Block = SIRENBlock
-
         self.layers = nn.ModuleList([
             Block(
                 dim=block_dim,
-                time_dim=time_cond_dim,
-                omega_0=omega_0_hidden,  # Use hidden omega_0 for all layers
-                use_film=use_film_in_block,
+                omega_0=omega_0_hidden,
                 dropout_rate=dropout_rate
             ) for _ in range(num_layers)
         ])
+        
+        # Output projection to remove time dimension
+        self.output_proj = nn.Linear(block_dim, dim)
 
     def forward(self, x: torch.Tensor, t: float) -> torch.Tensor:
         """Forward pass through SIREN ODE function.
@@ -338,27 +212,22 @@ class ODEFunc(nn.Module):
         Returns:
             Time derivative dz/dt of shape (B, D)
         """
-        if self.fusion_mode == "cat":
-            t_vec = torch.full(
-                (x.shape[0], 1), t, device=x.device, dtype=x.dtype
-            )
-            x = torch.cat([x, t_vec], dim=1)
-            time_cond = None
-        else:
-            t_tensor = torch.full((x.shape[0],), t, device=x.device, dtype=x.dtype)
-            if self.fusion_mode == "film_time_embed":
-                time_cond = self.time_embed(t_tensor)
-            else:  # "film"
-                time_cond = t_tensor.unsqueeze(1)
-            
+        # Concatenate time to features
+        t_vec = torch.full(
+            (x.shape[0], 1), t, device=x.device, dtype=x.dtype
+        )
+        x = torch.cat([x, t_vec], dim=1)
+        
+        # Pass through SIREN layers
         for layer in self.layers:
-            x = layer(x, time_cond)
+            x = layer(x)
             
+        # Project back to original dimension
         return self.output_proj(x)
 
 
 class OCSIREN(nn.Module):
-    """Optimal Control-regularized SIREN."""
+    """Optimal Control-regularized SIREN with concatenation-only time conditioning."""
     
     def __init__(
         self,
@@ -370,8 +239,6 @@ class OCSIREN(nn.Module):
         omega_0_hidden: float = 30.0,
         dropout_rate: float = 0.0,
         block_type: Literal["mlp", "residual"] = "residual",
-        fusion_mode: Literal["cat", "film", "film_time_embed"] = "film_time_embed",
-        time_embed_dim: int = 64,
         num_steps: int = 10,
         total_time: float = 1.0,
         ot_lambda: float = 1.0,
@@ -388,8 +255,6 @@ class OCSIREN(nn.Module):
             omega_0_hidden: Hidden layer frequency factor
             dropout_rate: Dropout rate
             block_type: Type of block ("mlp" or "residual")
-            fusion_mode: How to incorporate time conditioning
-            time_embed_dim: Dimension of time embeddings
             num_steps: Number of discretization steps for the ODE
             total_time: Total integration time T for the ODE
             ot_lambda: Weight for the optimal transport regularization
@@ -430,20 +295,16 @@ class OCSIREN(nn.Module):
             input_dim=input_dim,
             output_dim=hidden_dim,
             omega_0=omega_0,
-            is_first=True,  # Use first-layer initialization
-            use_film=False
+            is_first=True  # Use first-layer initialization
         )
 
-        # ODE function with SIREN dynamics
+        # ODE function with SIREN dynamics and concatenation-only time conditioning
         self.ode_func = ODEFunc(
             dim=hidden_dim,
             num_layers=num_layers,
-            omega_0=omega_0,
             omega_0_hidden=omega_0_hidden,
             dropout_rate=dropout_rate,
-            block_type=block_type,
-            fusion_mode=fusion_mode,
-            time_embed_dim=time_embed_dim
+            block_type=block_type
         )
                  
         # Output projection matching SIREN's final layer initialization
@@ -505,47 +366,37 @@ class OCSIREN(nn.Module):
 
 def _test():
     """Run tests for the OC-SIREN network."""
-    # Network parameters matching SIREN defaults
+    print("Testing OC-SIREN with concatenation-only time conditioning...")
+    
+    # Network parameters
     input_dim = 2
-    hidden_dim = 256
+    hidden_dim = 192
     output_dim = 1
-    num_layers = 4
+    num_layers = 3
     omega_0 = 30.0
     omega_0_hidden = 30.0
     dropout_rate = 0.0
     num_steps = 12
     final_activation = None
     
-    # Base ODE config for sweepable hyperparameters
-    base_ode_config = {
-        "num_layers": 4,
-        "dropout_rate": 0.0,
-        "block_type": "mlp",
-        "fusion_mode": "cat",
-        "time_embed_dim": 64
-    }
-
+    # Test configurations
     configs = {
-        "Default (cat, residual)": base_ode_config,
-        "FiLM with plain time": {**base_ode_config, "fusion_mode": "film"},
-        "MLP Blocks": {**base_ode_config, "block_type": "mlp"},
-        "Concat Fallback": {**base_ode_config, "fusion_mode": "cat"}
+        "MLP Blocks": {"block_type": "mlp"},
+        "Residual Blocks": {"block_type": "residual"}
     }
 
-    for name, ode_config in configs.items():
+    for name, config in configs.items():
         print(f"\n--- Testing: {name} ---")
         
         model = OCSIREN(
             input_dim=input_dim,
             hidden_dim=hidden_dim,
             output_dim=output_dim,
-            num_layers=ode_config["num_layers"],
+            num_layers=num_layers,
             omega_0=omega_0,
             omega_0_hidden=omega_0_hidden,
-            dropout_rate=ode_config["dropout_rate"],
-            block_type=ode_config["block_type"],
-            fusion_mode=ode_config["fusion_mode"],
-            time_embed_dim=ode_config["time_embed_dim"],
+            dropout_rate=dropout_rate,
+            block_type=config["block_type"],
             num_steps=num_steps,
             final_activation=final_activation
         )
@@ -560,18 +411,24 @@ def _test():
         print(f"  Input dim: {input_dim}")
         print(f"  Hidden dim: {hidden_dim}")
         print(f"  Output dim: {output_dim}")
+        print(f"  Num layers: {num_layers}")
         print(f"  Num steps (M): {num_steps}")
         print(f"  Omega_0: {omega_0}")
         print(f"  Omega_0_hidden: {omega_0_hidden}")
-        print(f"  ODE Config: {ode_config}")
+        print(f"  Block type: {config['block_type']}")
         print(f"\nParameters:")
         print(f"  Trainable: {trainable_params:,}")
         print(f"  Total: {total_params:,}")
         print(f"\nShapes:")
         print(f"  Input: {x.shape}")
         print(f"  Output: {y.shape}")
-        assert y.shape == (batch_size, output_dim)
         print(f"  OT Reg value: {ot_reg.item():.4f}")
+        
+        # Verify output shape
+        assert y.shape == (batch_size, output_dim), f"Expected {(batch_size, output_dim)}, got {y.shape}"
+        assert ot_reg.numel() == 1, f"OT regularization should be scalar, got shape {ot_reg.shape}"
+        
+        print("✓ Test passed!")
 
 
 if __name__ == "__main__":
