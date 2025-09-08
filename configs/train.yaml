@@ -10,9 +10,6 @@ defaults:
   - extras: default
   - hydra: default
 
-  # experiment configs for controlling the experiment
-  - experiment: null
-
 # task name, determines output directory path
 task_name: "train"
 
