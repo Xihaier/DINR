@@ -1,13 +1,14 @@
-from typing import Any, Dict, Tuple, Optional, List
+from typing import Any, Dict, Tuple, Optional
 
 import torch
 from lightning import LightningModule
-from torchmetrics import MaxMetric, MeanMetric, MinMetric
+from torchmetrics import MeanMetric, MinMetric
 import numpy as np
 import warnings
-import hydra
+import os
 
 from src.utils.metrics import l2_relative_error
+from src.utils.ntk import analyze_model_ntk
 
 
 class INRTraining(LightningModule):
@@ -20,7 +21,14 @@ class INRTraining(LightningModule):
         optimizer: Any = None,
         scheduler: Any = None,
         criterion: Any = None,
-        compile: bool = False,  
+        compile: bool = False,
+        # NTK analysis parameters
+        ntk_analysis: bool = False,
+        ntk_frequency: int = 10,
+        ntk_top_k: int = 10,
+        ntk_subset_size: Optional[int] = None,
+        ntk_subset_stride: int = 1,
+        ntk_normalize: str = "trace",
         **kwargs
     ) -> None:
         super().__init__()
@@ -29,15 +37,126 @@ class INRTraining(LightningModule):
         self.model = net
         self.criterion = criterion
 
+        # NTK analysis setup
+        self.ntk_analysis = ntk_analysis
+        self.ntk_frequency = ntk_frequency
+        self.ntk_top_k = ntk_top_k
+        self.ntk_subset_size = ntk_subset_size
+        self.ntk_subset_stride = ntk_subset_stride
+        self.ntk_normalize = ntk_normalize
+        self.ntk_training_inputs = None
+
         # metrics 
         self.train_loss = MeanMetric()
         self.test_loss = MeanMetric()
         self.train_rel_error = MeanMetric()
         self.train_rel_error_best = MinMetric()
+        
+        # NTK metrics
+        if self.ntk_analysis:
+            self.ntk_effective_rank = MeanMetric()
+            self.ntk_condition_number = MeanMetric()
+            self.ntk_spectrum_decay = MeanMetric()
+            for i in range(self.ntk_top_k):
+                setattr(self, f'ntk_eigenvalue_{i+1}', MeanMetric())
 
         # For storing test outputs
         self.test_predictions = []
         self.test_ground_truth = []
+
+    def _capture_training_inputs(self, batch: Tuple[torch.Tensor, torch.Tensor]) -> None:
+        """Capture training inputs for NTK analysis."""
+        if self.ntk_analysis:
+            coords, _ = batch
+            if self.ntk_training_inputs is None:
+                self.ntk_training_inputs = coords.detach().cpu()
+            else:
+                # Accumulate all training inputs (subsetting handled in _get_ntk_inputs)
+                new_inputs = coords.detach().cpu()
+                self.ntk_training_inputs = torch.cat([self.ntk_training_inputs, new_inputs], dim=0)
+
+    def _get_ntk_inputs(self) -> torch.Tensor:
+        """Get inputs for NTK analysis from captured training data."""
+        if self.ntk_training_inputs is None:
+            raise ValueError("No training inputs captured for NTK analysis. Ensure training has started.")
+        
+        # Apply stride-based subsampling
+        inputs = self.ntk_training_inputs[::self.ntk_subset_stride]
+        
+        # Apply size-based truncation if specified
+        if self.ntk_subset_size is not None:
+            inputs = inputs[:self.ntk_subset_size]
+            
+        return inputs
+
+    def _setup_ntk_analysis(self) -> None:
+        """Setup NTK analysis components."""
+        try:
+            # Store NTK results for analysis
+            self.ntk_results_history = []
+            
+            print(f"✓ NTK analysis initialized: top-{self.ntk_top_k} eigenvalues, "
+                  f"frequency every {self.ntk_frequency} epochs, "
+                  f"using training data")
+                  
+        except Exception as e:
+            warnings.warn(f"Failed to setup NTK analysis: {e}. Disabling NTK analysis.")
+            self.ntk_analysis = False
+
+    def _perform_ntk_analysis(self) -> Optional[Dict[str, float]]:
+        """Perform NTK analysis on the current model state."""
+        if not self.ntk_analysis:
+            return None
+            
+        try:
+            # Get inputs for NTK analysis
+            inputs = self._get_ntk_inputs()
+            device = next(self.model.parameters()).device
+            inputs = inputs.to(device)
+            
+            # Perform NTK analysis
+            result = analyze_model_ntk(
+                self.model,
+                inputs,
+                normalize=self.ntk_normalize,
+                top_k=self.ntk_top_k
+            )
+            
+            # Extract key metrics
+            metrics = {
+                'effective_rank': float(result.effective_rank),
+                'condition_number': float(result.condition_number),
+                'spectrum_decay': float(result.spectrum_decay),
+                'trace': float(result.trace),
+            }
+            
+            # Add top-k eigenvalues
+            for i, eigenval in enumerate(result.top_k_eigenvalues):
+                metrics[f'eigenvalue_{i+1}'] = float(eigenval)
+            
+            # Store for history tracking
+            metrics['epoch'] = self.current_epoch
+            self.ntk_results_history.append(metrics)
+            
+            # Update metrics
+            self.ntk_effective_rank(metrics['effective_rank'])
+            self.ntk_condition_number(metrics['condition_number'])
+            self.ntk_spectrum_decay(metrics['spectrum_decay'])
+            
+            # Update eigenvalue metrics
+            for i in range(min(self.ntk_top_k, len(result.top_k_eigenvalues))):
+                eigenval_metric = getattr(self, f'ntk_eigenvalue_{i+1}')
+                eigenval_metric(float(result.top_k_eigenvalues[i]))
+            
+            return metrics
+            
+        except Exception as e:
+            warnings.warn(f"NTK analysis failed at epoch {self.current_epoch}: {e}")
+            return None
+
+    def on_fit_start(self) -> None:
+        if self.ntk_analysis:
+            self._setup_ntk_analysis()
 
     def model_step(self, batch: Tuple[torch.Tensor, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Perform a single model step (forward pass + loss computation).
@@ -56,6 +175,9 @@ class INRTraining(LightningModule):
 
     def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> torch.Tensor:
         """Training step."""
+        # Capture training inputs for NTK analysis
+        self._capture_training_inputs(batch)
+        
         loss, pred, gt = self.model_step(batch)
         rel_error = l2_relative_error(pred.flatten(), gt.flatten())
         self.train_loss(loss)
@@ -64,12 +186,15 @@ class INRTraining(LightningModule):
         self.log("train/rel_error", self.train_rel_error, on_step=False, on_epoch=True, prog_bar=True)
         return loss
 
-    def on_training_epoch_end(self, unused: Optional = None) -> None:
+    def on_train_epoch_end(self, unused: Optional = None) -> None:
         """Called at the end of the training epoch."""
         rel_error = self.train_rel_error.compute()
         self.train_rel_error_best.update(rel_error)
         self.log("train/rel_error_best", self.train_rel_error_best.compute(), prog_bar=True)
 
+        if self.ntk_analysis and (self.current_epoch % self.ntk_frequency == 0):
+            _ = self._perform_ntk_analysis()
+            
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         """Test step."""
         loss, pred, gt = self.model_step(batch)
@@ -83,6 +208,9 @@ class INRTraining(LightningModule):
         """Evaluate the model on the full data grid if supported."""
         preds = torch.cat(self.test_predictions).numpy()
         self.save_predictions(preds, filename="test_preds")
+        
+        if self.ntk_analysis:
+            self.save_ntk_results()
             
     def setup(self, stage: str) -> None:
         """Called at the beginning of fit and test."""
@@ -123,6 +251,17 @@ class INRTraining(LightningModule):
         output_dir = self.trainer.log_dir
         np.save(f"{output_dir}/{filename}", predictions)
         
+    def save_ntk_results(self, filename: str = "ntk_analysis.npy") -> None:
+        """Save NTK analysis results to file."""
+        if hasattr(self, 'ntk_analysis') and self.ntk_analysis and hasattr(self, 'ntk_results_history'):
+            output_dir = self.trainer.log_dir
+            if output_dir is not None:
+                np.save(os.path.join(output_dir, filename), self.ntk_results_history)
+                print(f"✓ NTK results saved to {output_dir}/{filename}")
+            else:
+                np.save(filename, self.ntk_results_history)
+                print(f"✓ NTK results saved to {filename}")
+
     def get_model_info(self) -> Dict[str, Any]:
         """Return model information."""    
         info = {} 
@@ -152,7 +291,14 @@ class OCINRTraining(LightningModule):
         optimizer: Any = None,
         scheduler: Any = None,
         criterion: Any = None,
-        compile: bool = False,  
+        compile: bool = False,
+        # NTK analysis parameters
+        ntk_analysis: bool = True,
+        ntk_frequency: int = 10,
+        ntk_top_k: int = 10,
+        ntk_subset_size: Optional[int] = None,
+        ntk_subset_stride: int = 1,
+        ntk_normalize: str = "trace",
         **kwargs
     ) -> None:
         super().__init__()
@@ -161,6 +307,15 @@ class OCINRTraining(LightningModule):
         self.model = net
         self.criterion = criterion
 
+        # NTK analysis setup
+        self.ntk_analysis = ntk_analysis
+        self.ntk_frequency = ntk_frequency
+        self.ntk_top_k = ntk_top_k
+        self.ntk_subset_size = ntk_subset_size
+        self.ntk_subset_stride = ntk_subset_stride
+        self.ntk_normalize = ntk_normalize
+        self.ntk_training_inputs = None
+        
         # metrics 
         self.train_loss = MeanMetric()
         self.train_data_loss = MeanMetric()
@@ -170,10 +325,113 @@ class OCINRTraining(LightningModule):
         self.test_ot_loss = MeanMetric()
         self.train_rel_error = MeanMetric()
         self.train_rel_error_best = MinMetric()
+        
+        # NTK metrics
+        if self.ntk_analysis:
+            self.ntk_effective_rank = MeanMetric()
+            self.ntk_condition_number = MeanMetric()
+            self.ntk_spectrum_decay = MeanMetric()
+            # Metrics for top-k eigenvalues
+            for i in range(self.ntk_top_k):
+                setattr(self, f'ntk_eigenvalue_{i+1}', MeanMetric())
 
         # For storing test outputs
         self.test_predictions = []
         self.test_ground_truth = []
+
+    def _capture_training_inputs(self, batch: Tuple[torch.Tensor, torch.Tensor]) -> None:
+        """Capture training inputs for NTK analysis."""
+        if self.ntk_analysis:
+            coords, _ = batch
+            if self.ntk_training_inputs is None:
+                self.ntk_training_inputs = coords.detach().cpu()
+            else:
+                # Accumulate all training inputs (subsetting handled in _get_ntk_inputs)
+                new_inputs = coords.detach().cpu()
+                self.ntk_training_inputs = torch.cat([self.ntk_training_inputs, new_inputs], dim=0)
+
+    def _get_ntk_inputs(self) -> torch.Tensor:
+        """Get inputs for NTK analysis from captured training data."""
+        if self.ntk_training_inputs is None:
+            raise ValueError("No training inputs captured for NTK analysis. Ensure training has started.")
+        
+        # Apply stride-based subsampling
+        inputs = self.ntk_training_inputs[::self.ntk_subset_stride]
+        
+        # Apply size-based truncation if specified
+        if self.ntk_subset_size is not None:
+            inputs = inputs[:self.ntk_subset_size]
+            
+        return inputs
+
+    def _setup_ntk_analysis(self) -> None:
+        """Setup NTK analysis components."""
+        try:
+            # Store NTK results for analysis
+            self.ntk_results_history = []
+            
+            print(f"✓ NTK analysis initialized: top-{self.ntk_top_k} eigenvalues, "
+                  f"frequency every {self.ntk_frequency} epochs, "
+                  f"using training data")
+                  
+        except Exception as e:
+            warnings.warn(f"Failed to setup NTK analysis: {e}. Disabling NTK analysis.")
+            self.ntk_analysis = False
+
+    def _perform_ntk_analysis(self) -> Optional[Dict[str, float]]:
+        """Perform NTK analysis on the current model state."""
+        if not self.ntk_analysis:
+            return None
+            
+        try:
+            # Get inputs for NTK analysis
+            inputs = self._get_ntk_inputs()
+            device = next(self.model.parameters()).device
+            inputs = inputs.to(device)
+            
+            # Perform NTK analysis
+            result = analyze_model_ntk(
+                self.model,
+                inputs,
+                normalize=self.ntk_normalize,
+                top_k=self.ntk_top_k
+            )
+            
+            # Extract key metrics
+            metrics = {
+                'effective_rank': float(result.effective_rank),
+                'condition_number': float(result.condition_number),
+                'spectrum_decay': float(result.spectrum_decay),
+                'trace': float(result.trace),
+            }
+            
+            # Add top-k eigenvalues
+            for i, eigenval in enumerate(result.top_k_eigenvalues):
+                metrics[f'eigenvalue_{i+1}'] = float(eigenval)
+            
+            # Store for history tracking
+            metrics['epoch'] = self.current_epoch
+            self.ntk_results_history.append(metrics)
+            
+            # Update metrics
+            self.ntk_effective_rank(metrics['effective_rank'])
+            self.ntk_condition_number(metrics['condition_number'])
+            self.ntk_spectrum_decay(metrics['spectrum_decay'])
+            
+            # Update eigenvalue metrics
+            for i in range(min(self.ntk_top_k, len(result.top_k_eigenvalues))):
+                eigenval_metric = getattr(self, f'ntk_eigenvalue_{i+1}')
+                eigenval_metric(float(result.top_k_eigenvalues[i]))
+            
+            return metrics
+            
+        except Exception as e:
+            warnings.warn(f"NTK analysis failed at epoch {self.current_epoch}: {e}")
+            return None
+
+    def on_fit_start(self) -> None:
+        if self.ntk_analysis:
+            self._setup_ntk_analysis()
 
     def model_step(self, batch: Tuple[torch.Tensor, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Perform a single model step (forward pass + loss computation).
@@ -193,6 +451,9 @@ class OCINRTraining(LightningModule):
 
     def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> torch.Tensor:
         """Training step."""
+        # Capture training inputs for NTK analysis
+        self._capture_training_inputs(batch)
+        
         data_loss, ot_loss, loss, pred, gt = self.model_step(batch)
         rel_error = l2_relative_error(pred.flatten(), gt.flatten())
         self.train_data_loss(data_loss)
@@ -205,11 +466,14 @@ class OCINRTraining(LightningModule):
         self.log("train/rel_error", self.train_rel_error, on_step=False, on_epoch=True, prog_bar=True)
         return loss
 
-    def on_training_epoch_end(self, unused: Optional = None) -> None:
+    def on_train_epoch_end(self, unused: Optional = None) -> None:
         """Called at the end of the training epoch."""
         rel_error = self.train_rel_error.compute()
         self.train_rel_error_best.update(rel_error)
         self.log("train/rel_error_best", self.train_rel_error_best.compute(), prog_bar=True)
+
+        if self.ntk_analysis and (self.current_epoch % self.ntk_frequency == 0):
+            _ = self._perform_ntk_analysis()
 
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         """Test step."""
@@ -226,6 +490,9 @@ class OCINRTraining(LightningModule):
         """Evaluate the model on the full data grid if supported."""
         preds = torch.cat(self.test_predictions).numpy()
         self.save_predictions(preds, filename="test_preds")
+        
+        if hasattr(self, 'ntk_analysis') and self.ntk_analysis:
+            self.save_ntk_results()
             
     def setup(self, stage: str) -> None:
         """Called at the beginning of fit and test."""
@@ -266,6 +533,17 @@ class OCINRTraining(LightningModule):
         output_dir = self.trainer.log_dir
         np.save(f"{output_dir}/{filename}", predictions)
         
+    def save_ntk_results(self, filename: str = "ntk_analysis.npy") -> None:
+        """Save NTK analysis results to file."""
+        if hasattr(self, 'ntk_analysis') and self.ntk_analysis and hasattr(self, 'ntk_results_history'):
+            output_dir = self.trainer.log_dir
+            if output_dir is not None:
+                np.save(os.path.join(output_dir, filename), self.ntk_results_history)
+                print(f"✓ NTK results saved to {output_dir}/{filename}")
+            else:
+                np.save(filename, self.ntk_results_history)
+                print(f"✓ NTK results saved to {filename}")
+
     def get_model_info(self) -> Dict[str, Any]:
         """Return model information."""    
         info = {} 

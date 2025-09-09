@@ -23,7 +23,8 @@ class NTKResult:
     """Container for NTK analysis results.
     
     Attributes:
-        eigenvalues: Eigenvalues sorted in descending order
+        eigenvalues: Top-k eigenvalues sorted in descending order
+        top_k_eigenvalues: Explicit top-k eigenvalues for convenient access
         eigenvectors: Corresponding eigenvectors (optional)
         condition_number: λ_max / λ_min (for positive eigenvalues)
         trace: Sum of all eigenvalues
@@ -34,6 +35,7 @@ class NTKResult:
         metadata: Additional analysis metadata
     """
     eigenvalues: np.ndarray
+    top_k_eigenvalues: np.ndarray
     condition_number: float
     trace: float
     effective_rank: float
@@ -51,7 +53,8 @@ class NTKAnalyzer:
         self,
         model: nn.Module,
         device: Optional[torch.device] = None,
-        dtype: torch.dtype = torch.float32
+        dtype: torch.dtype = torch.float32,
+        default_top_k: int = 10
     ):
         """Initialize NTK analyzer.
         
@@ -59,10 +62,12 @@ class NTKAnalyzer:
             model: Neural network model to analyze
             device: Device to run computations on (auto-detected if None)
             dtype: Computation dtype for numerical stability
+            default_top_k: Default number of top eigenvalues to return
         """
         self.model = model
         self.device = device or next(model.parameters()).device
         self.dtype = dtype
+        self.default_top_k = default_top_k
         
         # Move model to specified device and dtype
         self.model = self.model.to(self.device, dtype=self.dtype)
@@ -130,7 +135,6 @@ class NTKAnalyzer:
         *,
         normalize: Literal["none", "trace", "params", "params_outputs"] = "none",
         center_kernel: bool = False,
-        show_progress: bool = False,
         chunk_size: Optional[int] = None
     ) -> Tensor:
         """Compute empirical NTK matrix.
@@ -142,7 +146,6 @@ class NTKAnalyzer:
             inputs: Input coordinates of shape (N, input_dim)
             normalize: Normalization scheme for the kernel
             center_kernel: Whether to apply kernel centering
-            show_progress: Whether to show computation progress
             chunk_size: Process inputs in chunks to save memory
             
         Returns:
@@ -159,12 +162,12 @@ class NTKAnalyzer:
             if chunk_size is not None and N > chunk_size:
                 # Chunked computation for large datasets
                 return self._compute_ntk_chunked(
-                    inputs, normalize, center_kernel, show_progress, chunk_size
+                    inputs, normalize, center_kernel, chunk_size
                 )
             else:
                 # Standard computation
                 return self._compute_ntk_standard(
-                    inputs, normalize, center_kernel, show_progress
+                    inputs, normalize, center_kernel
                 )
                 
         finally:
@@ -175,8 +178,7 @@ class NTKAnalyzer:
         self,
         inputs: Tensor,
         normalize: str,
-        center_kernel: bool,
-        show_progress: bool
+        center_kernel: bool
     ) -> Tensor:
         """Standard NTK computation for moderate-sized datasets."""
         N = inputs.shape[0]
@@ -194,9 +196,6 @@ class NTKAnalyzer:
             
             for i in range(N):
                 for c in range(C):
-                    if show_progress and (i * C + c) % max(1, total_outputs // 20) == 0:
-                        print(f"  Computing gradients: {i * C + c + 1}/{total_outputs}")
-                    
                     # Compute gradients for output y[i, c]
                     retain_graph = not (i == N - 1 and c == C - 1)
                     grads = torch.autograd.grad(
@@ -240,7 +239,6 @@ class NTKAnalyzer:
         inputs: Tensor,
         normalize: str,
         center_kernel: bool,
-        show_progress: bool,
         chunk_size: int
     ) -> Tensor:
         """Chunked NTK computation for large datasets."""
@@ -259,9 +257,6 @@ class NTKAnalyzer:
                 start_j = j * chunk_size
                 end_j = min((j + 1) * chunk_size, N)
                 chunk_j = inputs[start_j:end_j]
-                
-                if show_progress:
-                    print(f"  Processing chunk ({i+1}/{num_chunks}, {j+1}/{num_chunks})")
                 
                 # Compute kernel block
                 K_block = self._compute_kernel_block(chunk_i, chunk_j)
@@ -312,8 +307,7 @@ class NTKAnalyzer:
         normalize: Literal["none", "trace", "params", "params_outputs"] = "none",
         center_kernel: bool = False,
         return_eigenvectors: bool = False,
-        return_matrix: bool = False,
-        show_progress: bool = False
+        return_matrix: bool = False
     ) -> NTKResult:
         """Perform comprehensive NTK spectrum analysis.
         
@@ -324,24 +318,20 @@ class NTKAnalyzer:
             center_kernel: Whether to center the kernel
             return_eigenvectors: Whether to compute and return eigenvectors
             return_matrix: Whether to return the full kernel matrix
-            show_progress: Whether to show computation progress
             
         Returns:
             NTKResult with comprehensive spectrum analysis
         """
-        if show_progress:
-            print("Computing NTK matrix...")
-            
+        # Use default top_k if not specified
+        if top_k is None:
+            top_k = self.default_top_k
+        
         # Compute kernel matrix
         K = self.compute_ntk_matrix(
             inputs,
             normalize=normalize,
-            center_kernel=center_kernel,
-            show_progress=show_progress
+            center_kernel=center_kernel
         )
-        
-        if show_progress:
-            print("Computing eigendecomposition...")
         
         # Eigendecomposition (use double precision for stability)
         K_double = K.to(torch.float64)
@@ -359,18 +349,22 @@ class NTKAnalyzer:
         
         eigenvals = eigenvals.numpy()
         
+        # Store original eigenvalues for statistics computation
+        all_eigenvals = eigenvals.copy()
+        
         # Truncate to top_k if specified
         if top_k is not None:
             eigenvals = eigenvals[:top_k]
             if eigenvecs is not None:
                 eigenvecs = eigenvecs[:, :top_k]
         
-        # Compute spectrum statistics
-        stats = self._compute_spectrum_statistics(eigenvals)
+        # Compute spectrum statistics on all eigenvalues
+        stats = self._compute_spectrum_statistics(all_eigenvals)
         
         # Create result
         result = NTKResult(
             eigenvalues=eigenvals,
+            top_k_eigenvalues=eigenvals,  # Same as eigenvalues after truncation
             eigenvectors=eigenvecs,
             condition_number=stats["condition_number"],
             trace=stats["trace"],
@@ -384,7 +378,8 @@ class NTKAnalyzer:
                 "normalization": normalize,
                 "centered": center_kernel,
                 "input_dim": inputs.shape[1],
-                "model_type": type(self.model).__name__
+                "model_type": type(self.model).__name__,
+                "top_k": top_k
             }
         )
         
@@ -447,7 +442,6 @@ class NTKAnalyzer:
         results = {}
         
         for name, model in models.items():
-            print(f"\nAnalyzing model: {name}")
             analyzer = NTKAnalyzer(model, device=self.device, dtype=self.dtype)
             results[name] = analyzer.analyze_spectrum(inputs, **kwargs)
             
@@ -479,6 +473,7 @@ def analyze_model_ntk(
     inputs: Tensor,
     *,
     device: Optional[torch.device] = None,
+    top_k: int = 10,
     **kwargs
 ) -> NTKResult:
     """Convenience function for single-model NTK analysis.
@@ -487,13 +482,14 @@ def analyze_model_ntk(
         model: Neural network model
         inputs: Input coordinates
         device: Computation device
+        top_k: Number of top eigenvalues to return
         **kwargs: Additional arguments for analyze_spectrum
         
     Returns:
         NTK analysis result
     """
-    analyzer = NTKAnalyzer(model, device=device)
-    return analyzer.analyze_spectrum(inputs, **kwargs)
+    analyzer = NTKAnalyzer(model, device=device, default_top_k=top_k)
+    return analyzer.analyze_spectrum(inputs, top_k=top_k, **kwargs)
 
 
 def compare_model_ntks(
@@ -501,6 +497,7 @@ def compare_model_ntks(
     inputs: Tensor,
     *,
     device: Optional[torch.device] = None,
+    top_k: int = 10,
     **kwargs
 ) -> Dict[str, NTKResult]:
     """Convenience function for multi-model NTK comparison.
@@ -509,6 +506,7 @@ def compare_model_ntks(
         models: Dictionary of model_name -> model
         inputs: Input coordinates  
         device: Computation device
+        top_k: Number of top eigenvalues to return
         **kwargs: Additional arguments for analyze_spectrum
         
     Returns:
@@ -521,41 +519,8 @@ def compare_model_ntks(
     if device is None:
         device = next(iter(models.values())).parameters().__next__().device
     
-    analyzer = NTKAnalyzer(list(models.values())[0], device=device)
-    return analyzer.compare_models(models, inputs, **kwargs)
-
-
-# Utility functions for common use cases
-def quick_ntk_analysis(
-    model: nn.Module,
-    input_dim: int,
-    num_samples: int = 100,
-    *,
-    input_range: Tuple[float, float] = (-1.0, 1.0),
-    seed: Optional[int] = 42,
-    **kwargs
-) -> NTKResult:
-    """Quick NTK analysis with random inputs.
-    
-    Args:
-        model: Model to analyze
-        input_dim: Input dimension
-        num_samples: Number of random samples
-        input_range: Range for random input generation
-        seed: Random seed for reproducibility
-        **kwargs: Additional arguments for analyze_spectrum
-        
-    Returns:
-        NTK analysis result
-    """
-    if seed is not None:
-        torch.manual_seed(seed)
-        np.random.seed(seed)
-    
-    # Generate random inputs
-    inputs = torch.rand(num_samples, input_dim) * (input_range[1] - input_range[0]) + input_range[0]
-    
-    return analyze_model_ntk(model, inputs, **kwargs)
+    analyzer = NTKAnalyzer(list(models.values())[0], device=device, default_top_k=top_k)
+    return analyzer.compare_models(models, inputs, top_k=top_k, **kwargs)
 
 
 if __name__ == "__main__":
@@ -565,4 +530,3 @@ if __name__ == "__main__":
     print("- NTKAnalyzer: Main analysis class")
     print("- analyze_model_ntk: Single model analysis")
     print("- compare_model_ntks: Multi-model comparison")
-    print("- quick_ntk_analysis: Quick analysis with random inputs")
