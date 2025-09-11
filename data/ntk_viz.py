@@ -758,7 +758,7 @@ class NTKVisualizationPipeline:
         
         # Load and process data
         raw_data = self.data_loader.load_data()
-        
+
         # Extract eigenvalue matrices
         eigenvalue_matrices = {}
         for network_name, data_array in raw_data.items():

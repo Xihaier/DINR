@@ -372,7 +372,7 @@ def _test():
     input_dim = 2
     hidden_dim = 192
     output_dim = 1
-    num_layers = 3
+    num_layers = 7
     omega_0 = 30.0
     omega_0_hidden = 30.0
     dropout_rate = 0.0

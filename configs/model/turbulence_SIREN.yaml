@@ -26,3 +26,10 @@ net:
   omega_0_hidden: 30.0
 
 compile: false
+
+ntk_analysis: true
+ntk_frequency: 2
+ntk_top_k: 10
+ntk_subset_size: 1024
+ntk_subset_stride: 1
+ntk_normalize: "trace"
