@@ -70,6 +70,9 @@ class DataModule(LightningDataModule):
         shuffle: Union[bool, List[bool]] = True,
         num_workers: Union[int, List[int]] = 4,
         pin_memory: Union[bool, List[bool]] = True,
+        # NTK subset parameters
+        ntk_subset_mode: str = "subgrid",
+        ntk_subgrid_g: int = 32,
     ):
         super().__init__()
         self.save_hyperparameters(logger=False)
@@ -80,6 +83,10 @@ class DataModule(LightningDataModule):
 
         # Store path for data loading
         self.data_dir = data_dir
+        
+        # NTK subset storage
+        self._ntk_indices = None
+        self._ntk_coords = None
 
     def setup(self, stage: Optional[str] = None) -> None:
         """Load and process data."""
@@ -105,6 +112,9 @@ class DataModule(LightningDataModule):
         full_pointwise_dataset = torch.utils.data.TensorDataset(coords_flat, targets_flat)
         self.train_dataset = full_pointwise_dataset
         self.test_dataset = full_pointwise_dataset
+        
+        # Build fixed NTK subset
+        self._build_ntk_subset(coords_flat)
 
     def _create_dataloader(self, dataset: Dataset, dataloader_idx: int) -> DataLoader:
         """Helper function to create a DataLoader."""
@@ -132,6 +142,71 @@ class DataModule(LightningDataModule):
             persistent_workers=num_workers > 0
         )
 
+    def _build_ntk_subset(self, coords_flat: torch.Tensor) -> None:
+        """Build fixed NTK coordinate subset from the canonical grid.
+        
+        Args:
+            coords_flat: Full flattened coordinate grid (N, in_features)
+        """
+        if self.hparams.ntk_subset_mode == "all":
+            # Use all coordinates
+            self._ntk_indices = torch.arange(len(coords_flat))
+            self._ntk_coords = coords_flat.clone()
+            print(f"✓ NTK subset: using all {len(coords_flat)} coordinates")
+            return
+        
+        if self.hparams.ntk_subset_mode != "subgrid":
+            warnings.warn(
+                f"Unknown ntk_subset_mode '{self.hparams.ntk_subset_mode}', "
+                f"falling back to 'subgrid'"
+            )
+        
+        # Build uniform subgrid
+        dims = self.full_volume.shape
+        n_dims = len(dims)
+        g = self.hparams.ntk_subgrid_g
+        
+        # Create uniform subgrid indices for each dimension
+        subgrid_indices_per_dim = []
+        for d, dim_size in enumerate(dims):
+            if g >= dim_size:
+                # If requested grid size >= actual size, use all points
+                subgrid_indices_per_dim.append(torch.arange(dim_size))
+            else:
+                # Uniform spacing
+                step = (dim_size - 1) / (g - 1) if g > 1 else 0
+                indices = torch.round(torch.arange(g) * step).long()
+                # Clamp to valid range
+                indices = torch.clamp(indices, 0, dim_size - 1)
+                subgrid_indices_per_dim.append(indices)
+        
+        # Build multi-dimensional subgrid using meshgrid (row-major order)
+        subgrid_mesh = torch.meshgrid(*subgrid_indices_per_dim, indexing="ij")
+        subgrid_coords_nd = torch.stack([mesh.flatten() for mesh in subgrid_mesh], dim=-1)
+        
+        # Convert ND indices to flat indices (row-major)
+        strides = torch.tensor([np.prod(dims[i+1:], dtype=int) for i in range(n_dims)])
+        flat_indices = (subgrid_coords_nd * strides).sum(dim=-1)
+        
+        # Store indices and coordinates
+        self._ntk_indices = flat_indices
+        self._ntk_coords = coords_flat[flat_indices].clone()
+        
+        print(f"✓ NTK subset: {len(self._ntk_coords)} coords from "
+              f"{' × '.join(str(len(idx)) for idx in subgrid_indices_per_dim)} "
+              f"uniform subgrid")
+    
+    def get_ntk_coords(self) -> Optional[torch.Tensor]:
+        """Get fixed NTK coordinate subset (CPU tensor).
+        
+        Returns:
+            NTK coordinates tensor (M, in_features) on CPU, or None if not set up
+        """
+        if self._ntk_coords is None:
+            warnings.warn("NTK coordinates not yet initialized. Call setup() first.")
+            return None
+        return self._ntk_coords.clone()
+    
     def train_dataloader(self) -> DataLoader:
         """Create the training dataloader.
         """

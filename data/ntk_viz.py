@@ -71,7 +71,7 @@ class NTKDataLoader:
 
 def extract_eigenvalue_matrix(
     data_array: np.ndarray,
-    top_k: int = DEFAULT_TOP_K,
+    top_k: Optional[int] = None,
     max_iterations: Optional[int] = None
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
@@ -82,13 +82,13 @@ def extract_eigenvalue_matrix(
     
     Args:
         data_array: Array of dictionaries containing eigenvalue data for each iteration
-        top_k: Number of top eigenvalues to extract (default: 10)
+        top_k: Number of top eigenvalues to extract. If None, extracts all available eigenvalues
         max_iterations: Maximum number of iterations to process. If None, uses all
                        available iterations up to DEFAULT_MAX_ITERATIONS
     
     Returns:
         Tuple containing:
-        - eigenvalue_matrix: Matrix of shape (num_iterations, top_k) with eigenvalues
+        - eigenvalue_matrix: Matrix of shape (num_iterations, num_eigenvalues) with eigenvalues
         - iteration_indices: Array of iteration indices corresponding to matrix rows
         
     Note:
@@ -99,23 +99,48 @@ def extract_eigenvalue_matrix(
     else:
         max_iterations = min(max_iterations, len(data_array))
     
+    # Determine the maximum number of eigenvalues across all iterations
+    if top_k is None:
+        max_eigenvalues = 0
+        for iter_idx in range(max_iterations):
+            iteration_data = data_array[iter_idx]
+            # Find the highest eigenvalue index in this iteration
+            eigenvalue_count = 0
+            for key in iteration_data.keys():
+                if key.startswith('eigenvalue_'):
+                    try:
+                        eigen_idx = int(key.split('_')[1])
+                        eigenvalue_count = max(eigenvalue_count, eigen_idx)
+                    except (IndexError, ValueError):
+                        continue
+            max_eigenvalues = max(max_eigenvalues, eigenvalue_count)
+        
+        if max_eigenvalues == 0:
+            logger.warning("No eigenvalues found in data, using default top_k")
+            max_eigenvalues = DEFAULT_TOP_K
+        
+        num_eigenvalues = max_eigenvalues
+    else:
+        num_eigenvalues = top_k
+    
     iteration_indices = np.arange(max_iterations)
-    eigenvalue_matrix = np.full((max_iterations, top_k), np.nan, dtype=np.float64)
+    eigenvalue_matrix = np.full((max_iterations, num_eigenvalues), np.nan, dtype=np.float64)
     
     for iter_idx in range(max_iterations):
         iteration_data = data_array[iter_idx]
         
         # Extract eigenvalues (1-indexed in the data)
-        for eigen_rank in range(1, top_k + 1):
+        for eigen_rank in range(1, num_eigenvalues + 1):
             eigenvalue_key = f"eigenvalue_{eigen_rank}"
             if eigenvalue_key in iteration_data:
                 eigenvalue_matrix[iter_idx, eigen_rank - 1] = iteration_data[eigenvalue_key]
     
+    logger.info(f"Extracted eigenvalue matrix: {max_iterations} iterations × {num_eigenvalues} eigenvalues")
     return eigenvalue_matrix, iteration_indices
 
 def create_shared_normalization(
     eigenvalue_matrices: List[np.ndarray],
-    top_k: int,
+    top_k: Optional[int] = None,
     use_log_scale: bool = False,
     match_scale: bool = True
 ) -> Optional[Union[Normalize, LogNorm]]:
@@ -129,7 +154,7 @@ def create_shared_normalization(
     
     Args:
         eigenvalue_matrices: List of eigenvalue matrices to normalize across
-        top_k: Number of eigenvalues per matrix
+        top_k: Number of eigenvalues per matrix (None = use all eigenvalues)
         use_log_scale: Whether to use logarithmic scaling for color normalization
         match_scale: If False, returns None (allowing each plot to autoscale)
     
@@ -146,8 +171,11 @@ def create_shared_normalization(
     # Collect all eigenvalues excluding the first (largest) eigenvalue
     all_eigenvalues = []
     for matrix in eigenvalue_matrices:
-        # Skip first eigenvalue column (index 0), use eigenvalues 2..top_k
-        eigenvalue_subset = matrix[:, 1:top_k]
+        # Skip first eigenvalue column (index 0), use all remaining eigenvalues
+        if top_k is not None:
+            eigenvalue_subset = matrix[:, 1:top_k]
+        else:
+            eigenvalue_subset = matrix[:, 1:]  # Use all eigenvalues except first
         all_eigenvalues.append(eigenvalue_subset.ravel())
     
     # Combine and filter finite values
@@ -198,7 +226,7 @@ class NTKHeatmapPlotter:
         self,
         eigenvalue_matrix: np.ndarray,
         title: str,
-        top_k: int = DEFAULT_TOP_K,
+        top_k: Optional[int] = None,
         normalization: Optional[Union[Normalize, LogNorm]] = None,
         output_path: Optional[Union[str, Path]] = None
     ) -> None:
@@ -210,9 +238,9 @@ class NTKHeatmapPlotter:
         the visualization to focus on the more interesting smaller eigenvalues.
         
         Args:
-            eigenvalue_matrix: Matrix of shape (num_iterations, top_k) containing eigenvalues
+            eigenvalue_matrix: Matrix of shape (num_iterations, num_eigenvalues) containing eigenvalues
             title: Title for the plot
-            top_k: Number of eigenvalues in the matrix
+            top_k: Number of eigenvalues to display (None = use all available eigenvalues)
             normalization: Optional color normalization for consistent scaling across plots
             output_path: Path to save the figure. If None, figure is not saved
             
@@ -222,9 +250,14 @@ class NTKHeatmapPlotter:
             - The plot uses scientific plotting style for publication quality
         """
         with plt.style.context('science'):
-            # Exclude first eigenvalue and transpose for proper orientation
-            # Shape becomes (top_k-1, num_iterations) for heatmap display
-            heatmap_data = eigenvalue_matrix[:, 1:top_k].T
+            # Determine how many eigenvalues to show
+            if top_k is None:
+                # Use all eigenvalues except the first (largest)
+                heatmap_data = eigenvalue_matrix[:, 1:].T
+            else:
+                # Use specified number of eigenvalues, excluding the first
+                heatmap_data = eigenvalue_matrix[:, 1:top_k].T
+            
             num_eigenvalues, num_iterations = heatmap_data.shape
             
             # Create figure and heatmap
@@ -243,16 +276,9 @@ class NTKHeatmapPlotter:
             plt.xlabel("Training Step", fontsize=10)
             plt.ylabel("NTK Eigenvalue Rank", fontsize=10)
             
-            # Configure y-axis ticks (eigenvalue ranks 1 through top_k-1)
-            eigenvalue_labels = [str(i) for i in range(1, top_k)]
-            plt.yticks(np.arange(num_eigenvalues), eigenvalue_labels)
-            
-            # Configure x-axis ticks (training iterations, max 10 ticks)
-            max_ticks = 10
-            tick_step = max(1, num_iterations // max_ticks)
-            tick_positions = np.arange(0, num_iterations, tick_step)
-            tick_labels = [str(i) for i in tick_positions]
-            plt.xticks(tick_positions, tick_labels)
+            # Hide axis ticks and tick labels
+            plt.xticks([])
+            plt.yticks([])
             
             # Add colorbar
             colorbar = plt.colorbar(heatmap_image)
@@ -372,17 +398,32 @@ class NTKSpectrumPlotter:
             # Plot each network's eigenvalue spectrum
             for network_name, eigenvalues in eigenvalue_data.items():
                 style = plot_styles.get(network_name, {"color": "black", "marker": "o", "linestyle": "-"})
-                plt.plot(
-                    x_values,
-                    eigenvalues,
-                    label=network_name,
-                    marker=style["marker"],
-                    color=style["color"],
-                    linestyle=style["linestyle"],
-                    markersize=6,
-                    linewidth=2,
-                    alpha=0.8
-                )
+                
+                # For large number of eigenvalues, reduce marker frequency
+                if actual_num_eigenvalues > 50:
+                    # Use lines without markers for large spectra
+                    plt.plot(
+                        x_values,
+                        eigenvalues,
+                        label=network_name,
+                        color=style["color"],
+                        linestyle=style["linestyle"],
+                        linewidth=2,
+                        alpha=0.8
+                    )
+                else:
+                    # Use markers for small spectra
+                    plt.plot(
+                        x_values,
+                        eigenvalues,
+                        label=network_name,
+                        marker=style["marker"],
+                        color=style["color"],
+                        linestyle=style["linestyle"],
+                        markersize=6,
+                        linewidth=2,
+                        alpha=0.8
+                    )
             
             # Configure plot appearance
             if use_log_scale:
@@ -394,10 +435,10 @@ class NTKSpectrumPlotter:
             # Set labels and title
             if skip_first_eigenvalue:
                 xlabel = f"Eigenvalue Rank (excluding largest, showing ranks 2-{actual_num_eigenvalues+1})"
-                title_core = f"Top {actual_num_eigenvalues} Eigenvalues (excluding largest)"
+                title_core = f"Eigenvalue Spectrum (excluding largest, {actual_num_eigenvalues} eigenvalues)"
             else:
                 xlabel = f"Eigenvalue Rank (1-{actual_num_eigenvalues})"
-                title_core = f"Top {actual_num_eigenvalues} Eigenvalues (including largest)"
+                title_core = f"Full Eigenvalue Spectrum ({actual_num_eigenvalues} eigenvalues)"
             
             plt.xlabel(xlabel, fontsize=10)
             plt.ylabel(ylabel, fontsize=10)
@@ -406,6 +447,18 @@ class NTKSpectrumPlotter:
             if title_suffix:
                 title += f" {title_suffix}"
             plt.title(title, fontsize=12, pad=10)
+            
+            # Configure x-axis ticks for better readability with large numbers
+            if actual_num_eigenvalues > 100:
+                # For large spectra, use fewer, more spaced ticks
+                tick_step = max(1, actual_num_eigenvalues // 10)
+                tick_positions = np.arange(1, actual_num_eigenvalues + 1, tick_step)
+                plt.xticks(tick_positions)
+            elif actual_num_eigenvalues > 20:
+                # For medium spectra, use moderate spacing
+                tick_step = max(1, actual_num_eigenvalues // 20)
+                tick_positions = np.arange(1, actual_num_eigenvalues + 1, tick_step)
+                plt.xticks(tick_positions)
             
             # Add grid and legend
             plt.grid(True, linestyle="--", alpha=0.3)
@@ -419,108 +472,6 @@ class NTKSpectrumPlotter:
                 output_path = Path(output_path)
                 plt.savefig(output_path, dpi=self.dpi, bbox_inches="tight")
                 logger.info(f"Saved spectrum comparison to {output_path}")
-                plt.close()
-            else:
-                plt.show()
-    
-    def plot_eigenvalue_evolution(
-        self,
-        eigenvalue_matrices: Dict[str, np.ndarray],
-        eigenvalue_rank: int,
-        skip_first_eigenvalue: bool = False,
-        use_log_scale: bool = False,
-        output_path: Optional[Union[str, Path]] = None,
-        title_suffix: str = ""
-    ) -> None:
-        """
-        Plot the evolution of a specific eigenvalue rank across training iterations.
-        
-        Args:
-            eigenvalue_matrices: Dictionary mapping network names to eigenvalue matrices
-            eigenvalue_rank: Rank of eigenvalue to track (1-indexed, after optional skipping)
-            skip_first_eigenvalue: If True, exclude the largest eigenvalue (default: False)
-            use_log_scale: Whether to use logarithmic scale for y-axis
-            output_path: Path to save the figure. If None, figure is displayed
-            title_suffix: Additional text to append to the plot title
-        """
-        if not eigenvalue_matrices:
-            raise ValueError("No eigenvalue matrices provided")
-        
-        # Determine eigenvalue column index
-        col_index = eigenvalue_rank - 1
-        if skip_first_eigenvalue:
-            col_index += 1  # Skip the first eigenvalue
-        
-        # Check if the requested eigenvalue rank is available
-        min_eigenvalues = min(matrix.shape[1] for matrix in eigenvalue_matrices.values())
-        if col_index >= min_eigenvalues:
-            raise ValueError(f"Eigenvalue rank {eigenvalue_rank} not available")
-        
-        # Determine common iteration range
-        min_iterations = min(matrix.shape[0] for matrix in eigenvalue_matrices.values())
-        iteration_range = np.arange(min_iterations)
-        
-        # Create the plot
-        with plt.style.context('science'):
-            plt.figure(figsize=self.figure_size)
-            
-            # Define plot styles
-            plot_styles = {
-                "FFNet": {"color": "#1f77b4", "marker": "o", "linestyle": "-"},
-                "OCFFNet": {"color": "#ff7f0e", "marker": "s", "linestyle": "--"},
-                "SIREN": {"color": "#2ca02c", "marker": "^", "linestyle": "-."},
-                "OCSIREN": {"color": "#d62728", "marker": "D", "linestyle": ":"}
-            }
-            
-            # Plot eigenvalue evolution for each network
-            for network_name, matrix in eigenvalue_matrices.items():
-                eigenvalue_evolution = matrix[:min_iterations, col_index]
-                
-                # Filter out NaN values for plotting
-                valid_mask = np.isfinite(eigenvalue_evolution)
-                if np.any(valid_mask):
-                    style = plot_styles.get(network_name, {"color": "black", "marker": "o", "linestyle": "-"})
-                    plt.plot(
-                        iteration_range[valid_mask],
-                        eigenvalue_evolution[valid_mask],
-                        label=network_name,
-                        marker=style["marker"],
-                        color=style["color"],
-                        linestyle=style["linestyle"],
-                        markersize=4,
-                        linewidth=2,
-                        alpha=0.8,
-                        markevery=max(1, len(iteration_range) // 20)  # Reduce marker density
-                    )
-            
-            # Configure plot appearance
-            if use_log_scale:
-                plt.yscale("log")
-                ylabel = "Eigenvalue (log scale)"
-            else:
-                ylabel = "Eigenvalue"
-            
-            plt.xlabel("Training Iteration", fontsize=10)
-            plt.ylabel(ylabel, fontsize=10)
-            
-            # Create title
-            actual_rank = eigenvalue_rank + (1 if skip_first_eigenvalue else 0)
-            title = f"Evolution of Eigenvalue Rank {actual_rank}"
-            if title_suffix:
-                title += f" {title_suffix}"
-            plt.title(title, fontsize=12, pad=10)
-            
-            # Add grid and legend
-            plt.grid(True, linestyle="--", alpha=0.3)
-            plt.legend(frameon=True, fancybox=True, shadow=True, fontsize=9)
-            
-            plt.tight_layout()
-            
-            # Save or display
-            if output_path is not None:
-                output_path = Path(output_path)
-                plt.savefig(output_path, dpi=self.dpi, bbox_inches="tight")
-                logger.info(f"Saved eigenvalue evolution to {output_path}")
                 plt.close()
             else:
                 plt.show()
@@ -576,7 +527,8 @@ class NTKVisualizationPipeline:
         
         aligned_matrices = {}
         for name, matrix in matrices.items():
-            aligned_matrices[name] = matrix[:min_iterations, :self.top_k]
+            # Keep all eigenvalues, only align iterations
+            aligned_matrices[name] = matrix[:min_iterations, :]
             
         return aligned_matrices
     
@@ -596,7 +548,7 @@ class NTKVisualizationPipeline:
         # Extract eigenvalue matrices
         eigenvalue_matrices = {}
         for network_name, data_array in raw_data.items():
-            matrix, _ = extract_eigenvalue_matrix(data_array, top_k=self.top_k)
+            matrix, _ = extract_eigenvalue_matrix(data_array, top_k=None)  # Extract all eigenvalues
             eigenvalue_matrices[network_name] = matrix
             
         # Align matrices to common length
@@ -607,7 +559,7 @@ class NTKVisualizationPipeline:
         if self.match_scale:
             normalization = create_shared_normalization(
                 list(aligned_matrices.values()),
-                top_k=self.top_k,
+                top_k=None,  # Use all eigenvalues
                 use_log_scale=self.use_log_scale,
                 match_scale=self.match_scale
             )
@@ -626,7 +578,7 @@ class NTKVisualizationPipeline:
                 self.heatmap_plotter.plot_eigenvalue_heatmap(
                     eigenvalue_matrix=aligned_matrices[network_name],
                     title=plot_title,
-                    top_k=self.top_k,
+                    top_k=None,  # Use all eigenvalues
                     normalization=normalization,
                     output_path=output_path
                 )
@@ -634,21 +586,19 @@ class NTKVisualizationPipeline:
                 logger.warning(f"No data found for {network_name}")
         
         logger.info("Heatmap visualization completed successfully")
-        return aligned_matrices  # Return for potential use in spectrum plots
+        return aligned_matrices
     
     def generate_spectrum_comparisons(
         self,
         eigenvalue_matrices: Optional[Dict[str, np.ndarray]] = None,
-        iterations_to_plot: Optional[List[int]] = None,
-        eigenvalue_ranks_to_track: Optional[List[int]] = None
+        iterations_to_plot: Optional[List[int]] = None
     ) -> None:
         """
-        Generate eigenvalue spectrum comparison plots.
+        Generate eigenvalue spectrum comparison plots for specific iterations.
         
         Args:
             eigenvalue_matrices: Pre-computed eigenvalue matrices. If None, will load and process data
-            iterations_to_plot: List of iteration indices for spectrum comparisons. If None, uses [0, 1, 2, 3, 4, 5]
-            eigenvalue_ranks_to_track: List of eigenvalue ranks to track evolution. If None, uses [1, 2, 5]
+            iterations_to_plot: List of iteration indices for spectrum comparisons. If None, auto-detects available iterations
         """
         logger.info("Starting spectrum comparison generation")
         
@@ -657,77 +607,51 @@ class NTKVisualizationPipeline:
             raw_data = self.data_loader.load_data()
             matrices = {}
             for network_name, data_array in raw_data.items():
-                matrix, _ = extract_eigenvalue_matrix(data_array, top_k=self.top_k)
+                matrix, _ = extract_eigenvalue_matrix(data_array, top_k=None)  # Extract all eigenvalues
                 matrices[network_name] = matrix
             eigenvalue_matrices = self._align_matrices_to_common_length(matrices)
         
-        # Default iterations to plot (iterations 0 through 5)
+        # Default iterations to plot (all available iterations, up to 6)
         if iterations_to_plot is None:
             min_iterations = min(matrix.shape[0] for matrix in eigenvalue_matrices.values())
-            max_iter = min(5, min_iterations - 1)  # Ensure we don't exceed available iterations
-            iterations_to_plot = list(range(0, max_iter + 1))
+            max_iter = min(6, min_iterations)
+            iterations_to_plot = list(range(0, max_iter))
         
         # Generate spectrum comparison plots for specified iterations
         for iteration_idx in iterations_to_plot:
-            # Linear scale comparison
+            # Determine number of eigenvalues to show (all available)
+            max_eigenvalues = min(matrix.shape[1] for matrix in eigenvalue_matrices.values())
+            
+            # Linear scale comparison (all eigenvalues)
             output_path = self.output_dir / f"spectrum_comparison_iter_{iteration_idx}_linear.png"
             self.spectrum_plotter.plot_eigenvalue_spectrum_comparison(
                 eigenvalue_matrices=eigenvalue_matrices,
                 iteration_index=iteration_idx,
-                num_eigenvalues=5,  # Show only first 5 eigenvalues
+                num_eigenvalues=max_eigenvalues,  # Show ALL eigenvalues
                 skip_first_eigenvalue=False,
                 use_log_scale=False,
                 output_path=output_path,
                 title_suffix="(Linear Scale)"
             )
             
-            # Log scale comparison
+            # Log scale comparison (all eigenvalues)
             output_path = self.output_dir / f"spectrum_comparison_iter_{iteration_idx}_log.png"
             self.spectrum_plotter.plot_eigenvalue_spectrum_comparison(
                 eigenvalue_matrices=eigenvalue_matrices,
                 iteration_index=iteration_idx,
-                num_eigenvalues=5,  # Show only first 5 eigenvalues
+                num_eigenvalues=max_eigenvalues,  # Show ALL eigenvalues
                 skip_first_eigenvalue=False,
                 use_log_scale=True,
                 output_path=output_path,
                 title_suffix="(Log Scale)"
             )
         
-        # Generate eigenvalue evolution plots
-        if eigenvalue_ranks_to_track is None:
-            eigenvalue_ranks_to_track = [1, 2, 5]  # Track 1st, 2nd, and 5th eigenvalues
-        
-        for rank in eigenvalue_ranks_to_track:
-            if rank < self.top_k:
-                # Linear scale evolution
-                output_path = self.output_dir / f"eigenvalue_rank_{rank}_evolution_linear.png"
-                self.spectrum_plotter.plot_eigenvalue_evolution(
-                    eigenvalue_matrices=eigenvalue_matrices,
-                    eigenvalue_rank=rank,
-                    skip_first_eigenvalue=False,
-                    use_log_scale=False,
-                    output_path=output_path,
-                    title_suffix="(Linear Scale)"
-                )
-                
-                # Log scale evolution
-                output_path = self.output_dir / f"eigenvalue_rank_{rank}_evolution_log.png"
-                self.spectrum_plotter.plot_eigenvalue_evolution(
-                    eigenvalue_matrices=eigenvalue_matrices,
-                    eigenvalue_rank=rank,
-                    skip_first_eigenvalue=False,
-                    use_log_scale=True,
-                    output_path=output_path,
-                    title_suffix="(Log Scale)"
-                )
-        
         logger.info("Spectrum comparison generation completed successfully")
     
     def generate_all_visualizations(
         self,
         include_spectrum_plots: bool = True,
-        iterations_to_plot: Optional[List[int]] = None,
-        eigenvalue_ranks_to_track: Optional[List[int]] = None
+        iterations_to_plot: Optional[List[int]] = None
     ) -> None:
         """
         Generate all NTK eigenvalue visualizations.
@@ -735,7 +659,6 @@ class NTKVisualizationPipeline:
         Args:
             include_spectrum_plots: Whether to generate spectrum comparison plots
             iterations_to_plot: Specific iterations for spectrum comparisons
-            eigenvalue_ranks_to_track: Specific eigenvalue ranks to track evolution
         """
         logger.info("Starting comprehensive NTK eigenvalue visualization pipeline")
         
@@ -746,8 +669,7 @@ class NTKVisualizationPipeline:
         if include_spectrum_plots:
             self.generate_spectrum_comparisons(
                 eigenvalue_matrices=aligned_matrices,
-                iterations_to_plot=iterations_to_plot,
-                eigenvalue_ranks_to_track=eigenvalue_ranks_to_track
+                iterations_to_plot=iterations_to_plot
             )
         
         logger.info("Complete visualization pipeline finished successfully")
@@ -762,7 +684,7 @@ class NTKVisualizationPipeline:
         # Extract eigenvalue matrices
         eigenvalue_matrices = {}
         for network_name, data_array in raw_data.items():
-            matrix, _ = extract_eigenvalue_matrix(data_array, top_k=self.top_k)
+            matrix, _ = extract_eigenvalue_matrix(data_array, top_k=None)  # Extract all eigenvalues
             eigenvalue_matrices[network_name] = matrix
             
         # Align matrices to common length
@@ -773,7 +695,7 @@ class NTKVisualizationPipeline:
         if self.match_scale:
             normalization = create_shared_normalization(
                 list(aligned_matrices.values()),
-                top_k=self.top_k,
+                top_k=None,  # Use all eigenvalues
                 use_log_scale=self.use_log_scale,
                 match_scale=self.match_scale
             )
@@ -792,7 +714,7 @@ class NTKVisualizationPipeline:
                 self.heatmap_plotter.plot_eigenvalue_heatmap(
                     eigenvalue_matrix=aligned_matrices[network_name],
                     title=plot_title,
-                    top_k=self.top_k,
+                    top_k=None,  # Use all eigenvalues
                     normalization=normalization,
                     output_path=output_path
                 )
@@ -817,8 +739,7 @@ def main():
     # Visualization options
     visualization_options = {
         "include_spectrum_plots": True,  # Set False to generate only heatmaps
-        "iterations_to_plot": list(range(6)),  # Iterations 0 through 5 for spectrum comparison
-        "eigenvalue_ranks_to_track": [1, 2, 5]  # Track 1st, 2nd, and 5th eigenvalues
+        "iterations_to_plot": None,  # Auto-detect available iterations (will use 0-5 for current data)
     }
     
     try:
@@ -857,8 +778,7 @@ def generate_spectrum_plots_only():
     
     pipeline = NTKVisualizationPipeline(**config)
     pipeline.generate_spectrum_comparisons(
-        iterations_to_plot=list(range(6)),  # Iterations 0 through 5
-        eigenvalue_ranks_to_track=[1, 2, 5]
+        iterations_to_plot=None  # Auto-detect available iterations
     )
 
 
