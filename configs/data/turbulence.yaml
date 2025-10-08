@@ -8,3 +8,5 @@ batch_size: [65536, 65536, 65536]
 shuffle: [True, False, False]
 num_workers: [16, 4, 4]
 pin_memory: [True, True, True]
+ntk_subset_mode: subgrid
+ntk_subgrid_g: 32
