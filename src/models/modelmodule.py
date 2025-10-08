@@ -472,8 +472,10 @@ class OCINRTraining(LightningModule):
         coords, gt = batch
         pred, ot_loss = self.model(coords)
         data_loss = self.criterion(pred, gt)
-        loss = data_loss + ot_loss
-        
+        # loss = data_loss + ot_loss
+        # ablation study on ot_loss
+        # if self.ablation_study:
+        loss = data_loss
         return data_loss, ot_loss, loss, pred, gt
 
     def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> torch.Tensor:
