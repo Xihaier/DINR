@@ -35,3 +35,5 @@ ntk_analysis: true
 ntk_frequency: 2
 ntk_top_k: 10
 ntk_normalize: "trace"
+
+checkpoint_epochs: [0, 50, 100, 150, 200, 250, 300]

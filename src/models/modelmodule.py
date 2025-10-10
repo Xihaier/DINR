@@ -28,6 +28,8 @@ class INRTraining(LightningModule):
         ntk_frequency: int = 10,
         ntk_top_k: int = 10,
         ntk_normalize: str = "trace",
+        # Checkpoint parameters
+        checkpoint_epochs: list = None,
         **kwargs
     ) -> None:
         super().__init__()
@@ -41,6 +43,9 @@ class INRTraining(LightningModule):
         self.ntk_frequency = ntk_frequency
         self.ntk_top_k = ntk_top_k
         self.ntk_normalize = ntk_normalize
+        
+        # Checkpoint setup
+        self.checkpoint_epochs = checkpoint_epochs if checkpoint_epochs is not None else []
 
         # metrics 
         self.train_loss = MeanMetric()
@@ -168,6 +173,19 @@ class INRTraining(LightningModule):
         if self.ntk_analysis:
             self._setup_ntk_analysis()
 
+    def _save_checkpoint_at_epoch(self) -> None:
+        """Save model checkpoint at specific epoch."""
+        try:
+            output_dir = self.trainer.log_dir if self.trainer.log_dir is not None else "."
+            checkpoint_path = os.path.join(output_dir, f"checkpoint_epoch_{self.current_epoch}.ckpt")
+            
+            # Save the checkpoint using trainer
+            self.trainer.save_checkpoint(checkpoint_path)
+            print(f"✓ Checkpoint saved at epoch {self.current_epoch}: {checkpoint_path}")
+            
+        except Exception as e:
+            warnings.warn(f"Failed to save checkpoint at epoch {self.current_epoch}: {e}")
+
     def model_step(self, batch: Tuple[torch.Tensor, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Perform a single model step (forward pass + loss computation).
         
@@ -207,6 +225,10 @@ class INRTraining(LightningModule):
 
         if self.ntk_analysis and (self.current_epoch % self.ntk_frequency == 0):
             _ = self._perform_ntk_analysis()
+            
+        # Save checkpoint at predefined epochs
+        if self.current_epoch in self.checkpoint_epochs:
+            self._save_checkpoint_at_epoch()
             
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         """Test step."""
@@ -316,6 +338,8 @@ class OCINRTraining(LightningModule):
         ntk_frequency: int = 10,
         ntk_top_k: int = 10,
         ntk_normalize: str = "trace",
+        # Checkpoint parameters
+        checkpoint_epochs: list = None,
         **kwargs
     ) -> None:
         super().__init__()
@@ -329,6 +353,9 @@ class OCINRTraining(LightningModule):
         self.ntk_frequency = ntk_frequency
         self.ntk_top_k = ntk_top_k
         self.ntk_normalize = ntk_normalize
+        
+        # Checkpoint setup
+        self.checkpoint_epochs = checkpoint_epochs if checkpoint_epochs is not None else []
         
         # metrics 
         self.train_loss = MeanMetric()
@@ -460,6 +487,19 @@ class OCINRTraining(LightningModule):
         if self.ntk_analysis:
             self._setup_ntk_analysis()
 
+    def _save_checkpoint_at_epoch(self) -> None:
+        """Save model checkpoint at specific epoch."""
+        try:
+            output_dir = self.trainer.log_dir if self.trainer.log_dir is not None else "."
+            checkpoint_path = os.path.join(output_dir, f"checkpoint_epoch_{self.current_epoch}.ckpt")
+            
+            # Save the checkpoint using trainer
+            self.trainer.save_checkpoint(checkpoint_path)
+            print(f"✓ Checkpoint saved at epoch {self.current_epoch}: {checkpoint_path}")
+            
+        except Exception as e:
+            warnings.warn(f"Failed to save checkpoint at epoch {self.current_epoch}: {e}")
+
     def model_step(self, batch: Tuple[torch.Tensor, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Perform a single model step (forward pass + loss computation).
         
@@ -506,6 +546,10 @@ class OCINRTraining(LightningModule):
 
         if self.ntk_analysis and (self.current_epoch % self.ntk_frequency == 0):
             _ = self._perform_ntk_analysis()
+
+        # Save checkpoint at predefined epochs
+        if self.current_epoch in self.checkpoint_epochs:
+            self._save_checkpoint_at_epoch()
 
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         """Test step."""
