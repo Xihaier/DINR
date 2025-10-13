@@ -66,32 +66,6 @@ with plt.style.context('science'):
     plt.savefig("condition_number.png", dpi=300)
     plt.close()
 
-    # for i in range(50):
-    #     plt.figure(figsize=(6, 4))
-    #     plt.plot(eigenvalues_ffnet[i], label="FFNet")
-    #     plt.plot(eigenvalues_ocffnet[i], label="OCFFNet")
-    #     plt.plot(eigenvalues_ocffnet_withoutOT[i], label="OCFFNet without OT")
-    #     plt.yscale("log") 
-    #     plt.legend()
-    #     plt.title(f"eigenvalues at epoch {2*i}")
-    #     plt.savefig(f"eigenvalues_{i}.png", dpi=300)
-    #     plt.close()
-
-    # # Histogram plots for eigenvalue distributions
-    # for i in range(50):
-    #     plt.figure(figsize=(6, 4))
-    #     plt.hist(eigenvalues_ffnet[i], bins=70, alpha=0.5, label="FFNet")
-    #     plt.hist(eigenvalues_ocffnet[i], bins=70, alpha=0.5, label="OCFFNet")
-    #     plt.hist(eigenvalues_ocffnet_withoutOT[i], bins=70, alpha=0.5, label="OCFFNet without OT")
-    #     plt.xscale("log")
-    #     plt.xlabel("Eigenvalue")
-    #     plt.ylabel("Counts")
-    #     plt.legend()
-    #     plt.title(f"Eigenvalue distribution at epoch {2*i}")
-    #     plt.savefig(f"eigenvalues_hist_{i}.png", dpi=300)
-    #     plt.close()
-
-    # Fit distribution models and visualize
     # Select a few representative epochs for detailed analysis
     select_epochs = [0, 25, 50, 100]  # epochs 0, 50, 100, 300
     
@@ -104,12 +78,6 @@ with plt.style.context('science'):
     }
     
     for epoch_idx in select_epochs:
-        # At epoch 0, only show FFNet and OCFFNet
-        # models_data = [
-        #     (eigenvalues_ffnet[epoch_idx], "FFNet"),
-        #     (eigenvalues_ocffnet[epoch_idx], "OCFFNet")
-        # ]
-
         models_data = [
             (eigenvalues_ffnet[epoch_idx], "FFNet"),
             (eigenvalues_ocffnet[epoch_idx], "OCFFNet"),
@@ -163,13 +131,3 @@ with plt.style.context('science'):
             plt.tight_layout()
             plt.savefig(f"eigenvalues_{dist_key}_epoch_{epoch_idx}.png", dpi=300)
             plt.close()
-
-
-# eigenvalues_ffnet = eigenvalues_ffnet[100]
-# eigenvalues_ocffnet = eigenvalues_ocffnet[100]
-
-# ratio_ffnet = np.sum(eigenvalues_ffnet[:250]) / np.sum(eigenvalues_ffnet)
-# ratio_ocffnet = np.sum(eigenvalues_ocffnet[:250]) / np.sum(eigenvalues_ocffnet)
-
-# print(f"FFNet ratio: {ratio_ffnet}")
-# print(f"OCFFNet ratio: {ratio_ocffnet}")
