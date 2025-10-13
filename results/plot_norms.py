@@ -1,9 +1,12 @@
 """
 Compare parameter norms between different models (FFNet vs OCFFNet).
 
-This script calculates and compares norms for:
+This script calculates and compares average norms per parameter for:
 - FFNet: input_proj, hidden_blocks, output_proj
 - OCFFNet: input_proj, ode_func, output_proj
+
+For each component, the average norm is calculated by summing the norms
+of all parameters in that component and dividing by the number of parameters.
 """
 
 import os
@@ -395,6 +398,10 @@ def compare_models_across_epochs(
     """
     Compare parameter norms across multiple models and epochs.
     
+    For each component (input_proj, main_blocks, output_proj), this computes
+    the average norm per parameter by dividing the sum of parameter norms
+    by the number of parameters in that component.
+    
     Args:
         log_dirs: Dictionary mapping model names to log directories
                   e.g., {'FFNet': 'logs/run1', 'OCFFNet': 'logs/run2'}
@@ -405,7 +412,8 @@ def compare_models_across_epochs(
         output_dir: Directory to save results
         
     Returns:
-        Dictionary mapping model_name -> norm_type -> component -> {epoch: value}
+        Dictionary mapping model_name -> norm_type -> component -> {epoch: avg_value}
+        where avg_value is the average norm per parameter for that component
     """
     if output_dir is None:
         output_dir = "."
@@ -455,9 +463,16 @@ def compare_models_across_epochs(
                 for norm_type in norm_types:
                     norms = calculate_parameter_norms(model, norm_type=norm_type)
                     
-                    for component in ['input_proj', 'main_blocks', 'output_proj', 'total']:
-                        if component in norms:
-                            results[model_name][norm_type][component][epoch] = norms[component]
+                    # Store average norms per component
+                    for component in ['input_proj', 'main_blocks', 'output_proj']:
+                        results[model_name][norm_type][component][epoch] = norms[component]
+                        # component_avg = f'{component}_avg'
+                        # if component_avg in norms:
+                        #     results[model_name][norm_type][component][epoch] = norms[component_avg]
+                    
+                    # For total, store the aggregated value
+                    if 'total' in norms:
+                        results[model_name][norm_type]['total'][epoch] = norms['total']
                 
                 print("✓")
                 
@@ -512,8 +527,8 @@ def plot_model_comparison(
                                markersize=8, label=model_name, alpha=0.8)
                 
                 ax.set_xlabel('Epoch')
-                ax.set_ylabel(f'{norm_type.capitalize()} Norm')
-                ax.set_title(title)
+                ax.set_ylabel(f'Average {norm_type.capitalize()} Norm')
+                ax.set_title(f'{title} (Average per Parameter)')
                 ax.legend()
                 ax.grid(True, alpha=0.3)
                 
@@ -559,6 +574,7 @@ def save_comparison_results(results: Dict, output_dir: str):
     with open(output_file, 'w') as f:
         f.write("="*70 + "\n")
         f.write("MULTI-MODEL PARAMETER NORM COMPARISON RESULTS\n")
+        f.write("(Average Norms per Parameter for Components)\n")
         f.write("="*70 + "\n\n")
         
         model_names = list(results.keys())
@@ -577,7 +593,10 @@ def save_comparison_results(results: Dict, output_dir: str):
             
             # For each component
             for component in ['input_proj', 'main_blocks', 'output_proj', 'total']:
-                f.write(f"\n{component.upper()}:\n")
+                if component == 'total':
+                    f.write(f"\n{component.upper()} (Aggregated):\n")
+                else:
+                    f.write(f"\n{component.upper()} (Average per Parameter):\n")
                 f.write("-"*70 + "\n")
                 
                 # Header
