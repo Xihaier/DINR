@@ -1,8 +1,8 @@
-python src/train.py \
-  model=turbulence_FFNet \
-  model.ntk_analysis=False \
-  model.checkpoint_epochs=[] \
-  model.ablation_noise=False
+# python src/train.py \
+#   model=turbulence_FFNet \
+#   model.ntk_analysis=False \
+#   model.checkpoint_epochs=[] \
+#   model.ablation_noise=False
 
 python src/train.py -m \
   model=turbulence_FFNet \
