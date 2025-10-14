@@ -30,6 +30,9 @@ class INRTraining(LightningModule):
         ntk_normalize: str = "trace",
         # Checkpoint parameters
         checkpoint_epochs: list = None,
+        ablation_noise: bool = False,
+        noise_type: str = "gaussian",
+        noise_level: float = 0.01,
         **kwargs
     ) -> None:
         super().__init__()
@@ -46,6 +49,11 @@ class INRTraining(LightningModule):
         
         # Checkpoint setup
         self.checkpoint_epochs = checkpoint_epochs if checkpoint_epochs is not None else []
+        
+        # Noise setup
+        self.ablation_noise = ablation_noise
+        self.noise_type = noise_type
+        self.noise_level = noise_level
 
         # metrics 
         self.train_loss = MeanMetric()
@@ -169,6 +177,19 @@ class INRTraining(LightningModule):
             warnings.warn(f"NTK analysis failed at epoch {self.current_epoch}: {e}")
             return None
 
+    def _add_output_noise(self, gt, noise_type, noise_level):
+        with torch.no_grad():
+            x = gt.detach()
+            if noise_type == "gaussian":
+                noise = torch.randn_like(x) * noise_level
+                x = x + noise
+            elif noise_type == "uniform":
+                noise = torch.rand_like(x) * noise_level
+                x = x + noise
+            else:
+                raise ValueError(f"Unknown noise kind: {noise_type}")
+            return x.clamp(0.0, 1.0)
+
     def on_fit_start(self) -> None:
         if self.ntk_analysis:
             self._setup_ntk_analysis()
@@ -197,8 +218,11 @@ class INRTraining(LightningModule):
         """
         coords, gt = batch
         pred = self.model(coords)
-        loss = self.criterion(pred, gt)
-        
+        if self.ablation_noise:
+            gt_noisy = self._add_output_noise(gt, self.noise_type, self.noise_level)
+        else:
+            gt_noisy = gt
+        loss = self.criterion(pred, gt_noisy)
         return loss, pred, gt
 
     def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> torch.Tensor:
@@ -340,6 +364,10 @@ class OCINRTraining(LightningModule):
         ntk_normalize: str = "trace",
         # Checkpoint parameters
         checkpoint_epochs: list = None,
+        ablation_ot_loss: bool = False,
+        ablation_noise: bool = False,
+        noise_type: str = "gaussian",
+        noise_level: float = 0.01,
         **kwargs
     ) -> None:
         super().__init__()
@@ -356,7 +384,15 @@ class OCINRTraining(LightningModule):
         
         # Checkpoint setup
         self.checkpoint_epochs = checkpoint_epochs if checkpoint_epochs is not None else []
-        
+
+        # OT loss setup
+        self.ablation_ot_loss = ablation_ot_loss
+
+        # Noise setup
+        self.ablation_noise = ablation_noise
+        self.noise_type = noise_type
+        self.noise_level = noise_level
+
         # metrics 
         self.train_loss = MeanMetric()
         self.train_data_loss = MeanMetric()
@@ -483,6 +519,19 @@ class OCINRTraining(LightningModule):
             warnings.warn(f"NTK analysis failed at epoch {self.current_epoch}: {e}")
             return None
 
+    def _add_output_noise(self, gt, noise_type, noise_level):
+        with torch.no_grad():
+            x = gt.detach()
+            if noise_type == "gaussian":
+                noise = torch.randn_like(x) * noise_level
+                x = x + noise
+            elif noise_type == "uniform":
+                noise = torch.rand_like(x) * noise_level
+                x = x + noise
+            else:
+                raise ValueError(f"Unknown noise kind: {noise_type}")
+            return x.clamp(0.0, 1.0)
+
     def on_fit_start(self) -> None:
         if self.ntk_analysis:
             self._setup_ntk_analysis()
@@ -511,10 +560,17 @@ class OCINRTraining(LightningModule):
         """
         coords, gt = batch
         pred, ot_loss = self.model(coords)
-        data_loss = self.criterion(pred, gt)
-        loss = data_loss + ot_loss
-        # ablation study on ot_loss
-        # loss = data_loss
+
+        if self.ablation_noise:
+            gt_noisy = self._add_output_noise(gt, self.noise_type, self.noise_level)
+        else:
+            gt_noisy = gt
+
+        data_loss = self.criterion(pred, gt_noisy)
+        if self.ablation_ot_loss:
+            loss = data_loss
+        else:
+            loss = data_loss + ot_loss
         return data_loss, ot_loss, loss, pred, gt
 
     def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> torch.Tensor:

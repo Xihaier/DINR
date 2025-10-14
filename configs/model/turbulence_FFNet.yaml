@@ -37,3 +37,7 @@ ntk_top_k: 10
 ntk_normalize: "trace"
 
 checkpoint_epochs: [0, 50, 100, 150, 200, 250, 300]
+
+ablation_noise: true
+noise_type: "gaussian"
+noise_level: 0.01
