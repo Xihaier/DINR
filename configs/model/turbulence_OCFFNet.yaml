@@ -34,14 +34,14 @@ net:
 
 compile: false
 
-ntk_analysis: true
+ntk_analysis: false
 ntk_frequency: 2
 ntk_top_k: 10
 ntk_normalize: "trace"
 
 checkpoint_epochs: [0, 50, 100, 150, 200, 250, 300]
 
-ablation_ot_loss: False
-ablation_noise: true
+ablation_ot_loss: false
+ablation_noise: false
 noise_type: "gaussian"
 noise_level: 0.01

@@ -1,0 +1,3 @@
+python src/train.py model=turbulence_FFNet data.generalization_test=true data.batch_size=[52497,52497,37303] model.checkpoint_epochs=[]
+python src/train.py model=turbulence_OCFFNet data.generalization_test=true data.batch_size=[52497,52497,37303] model.checkpoint_epochs=[]
+python src/train.py model=turbulence_OCFFNet data.generalization_test=true data.batch_size=[52497,52497,37303] model.ablation_ot_loss=true model.checkpoint_epochs=[]
