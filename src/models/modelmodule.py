@@ -271,10 +271,10 @@ class INRTraining(LightningModule):
 
     def on_test_epoch_end(self) -> None:
         """Evaluate the model on the full data grid if supported."""
-        preds = torch.cat(self.test_predictions).numpy()
-        ground_truths = torch.cat(self.test_ground_truth).numpy()
+        preds = torch.cat(self.test_predictions)
+        ground_truths = torch.cat(self.test_ground_truth)
         rel_error = l2_relative_error(preds.flatten(), ground_truths.flatten())
-        self.save_data(preds, filename="test_preds")
+        self.save_data(preds.detach().cpu().numpy(), filename="test_preds")
         self.save_data(rel_error, filename="test_rel_error")
         
         if self.ntk_analysis:
@@ -628,10 +628,10 @@ class OCINRTraining(LightningModule):
 
     def on_test_epoch_end(self) -> None:
         """Evaluate the model on the full data grid if supported."""
-        preds = torch.cat(self.test_predictions).numpy()
-        ground_truths = torch.cat(self.test_ground_truth).numpy()
+        preds = torch.cat(self.test_predictions)
+        ground_truths = torch.cat(self.test_ground_truth)
         rel_error = l2_relative_error(preds.flatten(), ground_truths.flatten())
-        self.save_data(preds, filename="test_preds")
+        self.save_data(preds.detach().cpu().numpy(), filename="test_preds")
         self.save_data(rel_error, filename="test_rel_error")
         
         if hasattr(self, 'ntk_analysis') and self.ntk_analysis:
