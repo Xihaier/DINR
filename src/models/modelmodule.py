@@ -272,7 +272,10 @@ class INRTraining(LightningModule):
     def on_test_epoch_end(self) -> None:
         """Evaluate the model on the full data grid if supported."""
         preds = torch.cat(self.test_predictions).numpy()
-        self.save_predictions(preds, filename="test_preds")
+        ground_truths = torch.cat(self.test_ground_truth).numpy()
+        rel_error = l2_relative_error(preds.flatten(), ground_truths.flatten())
+        self.save_data(preds, filename="test_preds")
+        self.save_data(rel_error, filename="test_rel_error")
         
         if self.ntk_analysis:
             self.save_ntk_results()
@@ -311,10 +314,10 @@ class INRTraining(LightningModule):
             
         return {"optimizer": optimizer}
 
-    def save_predictions(self, predictions: np.ndarray, filename: str = "predictions.npy") -> None:
-        """Save predictions to a file."""
+    def save_data(self, data: np.ndarray, filename: str = "predictions.npy") -> None:
+        """Save data to a file."""
         output_dir = self.trainer.log_dir
-        np.save(f"{output_dir}/{filename}", predictions)
+        np.save(f"{output_dir}/{filename}", data)
         
     def save_ntk_results(self, filename: str = "ntk_analysis.npy") -> None:
         """Save NTK analysis results to file."""
@@ -626,7 +629,10 @@ class OCINRTraining(LightningModule):
     def on_test_epoch_end(self) -> None:
         """Evaluate the model on the full data grid if supported."""
         preds = torch.cat(self.test_predictions).numpy()
-        self.save_predictions(preds, filename="test_preds")
+        ground_truths = torch.cat(self.test_ground_truth).numpy()
+        rel_error = l2_relative_error(preds.flatten(), ground_truths.flatten())
+        self.save_data(preds, filename="test_preds")
+        self.save_data(rel_error, filename="test_rel_error")
         
         if hasattr(self, 'ntk_analysis') and self.ntk_analysis:
             self.save_ntk_results()
@@ -665,10 +671,10 @@ class OCINRTraining(LightningModule):
             
         return {"optimizer": optimizer}
 
-    def save_predictions(self, predictions: np.ndarray, filename: str = "predictions.npy") -> None:
-        """Save predictions to a file."""
+    def save_data(self, data: np.ndarray, filename: str = "predictions.npy") -> None:
+        """Save data to a file."""
         output_dir = self.trainer.log_dir
-        np.save(f"{output_dir}/{filename}", predictions)
+        np.save(f"{output_dir}/{filename}", data)
         
     def save_ntk_results(self, filename: str = "ntk_analysis.npy") -> None:
         """Save NTK analysis results to file."""

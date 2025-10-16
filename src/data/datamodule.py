@@ -73,6 +73,7 @@ class DataModule(LightningDataModule):
         ntk_subset_mode: str = "subgrid",
         ntk_subgrid_g: int = 32,
         generalization_test: bool = False,
+        generalization_train_percentage: float = 0.75,
     ):
         super().__init__()
         self.save_hyperparameters(logger=False)
@@ -87,7 +88,8 @@ class DataModule(LightningDataModule):
         self._ntk_coords = None
 
         self.generalization_test = generalization_test
-
+        self.generalization_train_percentage = generalization_train_percentage
+        
     def setup(self, stage: Optional[str] = None) -> None:
         """Load and process data."""
         if self.train_dataset is not None:
@@ -110,19 +112,15 @@ class DataModule(LightningDataModule):
         coords_flat = torch.stack(torch.meshgrid(*self.coord_vectors, indexing="ij"), dim=-1).view(-1, self.hparams.in_features)
         targets_flat = self.full_volume.flatten().unsqueeze(-1)
 
+        # Generalization test
         if self.generalization_test:
-            test_mask = torch.zeros_like(self.full_volume, dtype=torch.bool)
-            test_indices_1d = torch.arange(1, 1022, 2)
-            grid_y, grid_x = torch.meshgrid(test_indices_1d, test_indices_1d, indexing='ij')
-            test_mask[grid_y, grid_x] = True
-            test_mask_flat = test_mask.flatten()
-            train_mask_flat = ~test_mask_flat
-            train_coords = coords_flat[train_mask_flat]
-            train_targets = targets_flat[train_mask_flat]
-            test_coords = coords_flat[test_mask_flat]
-            test_targets = targets_flat[test_mask_flat]
-            self.train_dataset = TensorDataset(train_coords, train_targets)
-            self.test_dataset = TensorDataset(test_coords, test_targets)
+            num_total_samples = len(coords_flat)
+            num_train_samples = int(num_total_samples * self.generalization_train_percentage)
+            indices = torch.randperm(num_total_samples)
+            train_indices = indices[:num_train_samples]
+            test_indices = indices[num_train_samples:]
+            self.train_dataset = TensorDataset(coords_flat[train_indices], targets_flat[train_indices])
+            self.test_dataset = TensorDataset(coords_flat[test_indices], targets_flat[test_indices])
         else:
             full_pointwise_dataset = torch.utils.data.TensorDataset(coords_flat, targets_flat)
             self.train_dataset = full_pointwise_dataset

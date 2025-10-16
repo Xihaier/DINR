@@ -11,3 +11,4 @@ pin_memory: [True, True, True]
 ntk_subset_mode: subgrid
 ntk_subgrid_g: 32
 generalization_test: false
+generalization_train_percentage: 0.75
