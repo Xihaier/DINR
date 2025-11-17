@@ -15,10 +15,6 @@ This is the offical PyTorch implementation of **DINR**  Dynamical Implicit Neura
 - [Quick Start](#-quick-start)
 - [Project Structure](#-project-structure)
 - [Configuration](#️-configuration)
-- [Usage](#-usage)
-- [Models](#-models)
-- [Advanced Features](#-advanced-features)
-- [Contributing](#-contributing)
 - [Citation](#-citation)
 - [License](#-license)
 
