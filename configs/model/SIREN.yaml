@@ -26,3 +26,14 @@ net:
   omega_0_hidden: 30.0
 
 compile: false
+
+ntk_analysis: false
+ntk_frequency: 2
+ntk_top_k: 10
+ntk_normalize: "trace"
+
+checkpoint_epochs: []
+
+ablation_noise: false
+noise_type: "gaussian"
+noise_level: 0.01

@@ -225,8 +225,8 @@ class ODEFunc(nn.Module):
         return self.output_proj(x)
 
 
-class OCFourierFeatureNetwork(nn.Module):
-    """Optimal Control-regularized Fourier Feature Network with concatenation-only time conditioning."""
+class DynamicalFourierFeatureNetwork(nn.Module):
+    """Dynamical Fourier Feature Network."""
     
     VALID_ACTIVATIONS = {
         "ReLU": nn.ReLU(),
@@ -257,7 +257,7 @@ class OCFourierFeatureNetwork(nn.Module):
         sigma: float = 1.0,
         final_activation: Optional[str] = None
     ) -> None:
-        """Initialize the OC-FourierFeatureNetwork model.
+        """Initialize the Dynamical Fourier Feature Network model.
         
         Args:
             input_dim: Number of input dimensions
@@ -328,15 +328,14 @@ class OCFourierFeatureNetwork(nn.Module):
         return cls.VALID_ACTIVATIONS[activation_name]
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Forward pass of the OC-FourierFeatureNetwork.
+        """Forward pass of the Dynamical Fourier Feature Network.
         
         Args:
             x: Input coordinates of shape (batch_size, input_dim)
             
         Returns:
-            Tuple of (network_output, ot_regularization_term)
+            Tuple of (network_output)
             - network_output: shape (batch_size, output_dim)
-            - ot_regularization_term: scalar tensor
         """
         # Set initial state z(0) = phi(x)
         z = self.fourier_features(x)
@@ -371,8 +370,8 @@ class OCFourierFeatureNetwork(nn.Module):
 
 
 def _test():
-    """Run tests for the OC-FourierFeatureNetwork."""
-    print("Testing OC-FourierFeatureNetwork with concatenation-only time conditioning...")
+    """Run tests for the Dynamical Fourier Feature Network."""
+    print("Testing Dynamical Fourier Feature Network")
     
     # Network parameters
     input_dim = 2
@@ -395,7 +394,7 @@ def _test():
     for name, config in configs.items():
         print(f"\n--- Testing: {name} ---")
         
-        model = OCFourierFeatureNetwork(
+        model = DynamicalFourierFeatureNetwork(
             input_dim=input_dim,
             mapping_size=mapping_size,
             hidden_dim=hidden_dim,

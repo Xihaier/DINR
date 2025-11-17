@@ -6,7 +6,6 @@ from torchmetrics import MeanMetric, MinMetric
 import numpy as np
 import warnings
 import os
-import time
 
 from src.utils.metrics import l2_relative_error
 from src.utils.ntk import analyze_model_ntk
@@ -227,9 +226,7 @@ class INRTraining(LightningModule):
 
     def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> torch.Tensor:
         """Training step."""
-        forward_start = time.perf_counter()
         loss, pred, gt = self.model_step(batch)
-        forward_time = time.perf_counter() - forward_start
         
         rel_error = l2_relative_error(pred.flatten(), gt.flatten())
         self.train_loss(loss)
@@ -237,7 +234,6 @@ class INRTraining(LightningModule):
         
         self.log("train/loss", self.train_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("train/rel_error", self.train_rel_error, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("train/forward_time", forward_time, on_step=True, on_epoch=True, prog_bar=False)
         
         return loss
 
@@ -256,15 +252,12 @@ class INRTraining(LightningModule):
             
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         """Test step."""
-        forward_start = time.perf_counter()
         loss, pred, gt = self.model_step(batch)
-        forward_time = time.perf_counter() - forward_start
 
         rel_error = l2_relative_error(pred.flatten(), gt.flatten())
         self.test_loss(loss)
         
         self.log("test/rel_error", rel_error, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("test/forward_time", forward_time, on_step=True, on_epoch=True, prog_bar=False)
         
         self.test_predictions.append(pred.detach().cpu())
         self.test_ground_truth.append(gt.detach().cpu())
@@ -349,8 +342,8 @@ class INRTraining(LightningModule):
         return info
     
 
-class OCINRTraining(LightningModule):
-    """A Lightning Module for optimal control-regularized implicit neural representation training.
+class DINRTraining(LightningModule):
+    """A Lightning Module for dynamical implicit neural representation training.
     """
 
     def __init__(
@@ -578,9 +571,7 @@ class OCINRTraining(LightningModule):
 
     def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> torch.Tensor:
         """Training step."""
-        forward_start = time.perf_counter()
         data_loss, ot_loss, loss, pred, gt = self.model_step(batch)
-        forward_time = time.perf_counter() - forward_start
         
         rel_error = l2_relative_error(pred.flatten(), gt.flatten())
         self.train_data_loss(data_loss)
@@ -592,7 +583,6 @@ class OCINRTraining(LightningModule):
         self.log("train/data_loss", self.train_data_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("train/ot_loss", self.train_ot_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("train/rel_error", self.train_rel_error, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("train/forward_time", forward_time, on_step=True, on_epoch=True, prog_bar=False)
         
         return loss
 
@@ -611,9 +601,7 @@ class OCINRTraining(LightningModule):
 
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         """Test step."""
-        forward_start = time.perf_counter()
         data_loss, ot_loss, loss, pred, gt = self.model_step(batch)
-        forward_time = time.perf_counter() - forward_start
 
         rel_error = l2_relative_error(pred.flatten(), gt.flatten())
         self.test_loss(loss)
@@ -621,7 +609,6 @@ class OCINRTraining(LightningModule):
         self.test_ot_loss(ot_loss)
         
         self.log("test/rel_error", rel_error, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("test/forward_time", forward_time, on_step=True, on_epoch=True, prog_bar=False)
         
         self.test_predictions.append(pred.detach().cpu())
         self.test_ground_truth.append(gt.detach().cpu())

@@ -25,8 +25,19 @@ net:
   output_dim: 1
   sigma: 10.0
   dropout_rate: 0.1
-  activation: "GELU"  # Options: "ReLU", "GELU", "SiLU", "LeakyReLU", "Sigmoid", "Tanh", "ELU", "SELU", "Mish"
+  activation: "GELU"
   final_activation: null
   use_residual: true
 
 compile: false
+
+ntk_analysis: false
+ntk_frequency: 2
+ntk_top_k: 10
+ntk_normalize: "trace"
+
+checkpoint_epochs: []
+
+ablation_noise: false
+noise_type: "gaussian"
+noise_level: 0.01

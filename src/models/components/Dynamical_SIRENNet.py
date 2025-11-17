@@ -226,8 +226,8 @@ class ODEFunc(nn.Module):
         return self.output_proj(x)
 
 
-class OCSIREN(nn.Module):
-    """Optimal Control-regularized SIREN with concatenation-only time conditioning."""
+class DynamicalSIREN(nn.Module):
+    """Dynamical SIREN."""
     
     def __init__(
         self,
@@ -244,7 +244,7 @@ class OCSIREN(nn.Module):
         ot_lambda: float = 1.0,
         final_activation: Optional[str] = None
     ) -> None:
-        """Initialize the OC-SIREN model.
+        """Initialize the Dynamical SIREN model.
         
         Args:
             input_dim: Number of input dimensions
@@ -320,7 +320,7 @@ class OCSIREN(nn.Module):
             self.final_activation = nn.Identity()
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Forward pass of the OC-SIREN.
+        """Forward pass of the Dynamical SIREN.
         
         Args:
             x: Input coordinates of shape (batch_size, input_dim)
@@ -365,8 +365,8 @@ class OCSIREN(nn.Module):
 
 
 def _test():
-    """Run tests for the OC-SIREN network."""
-    print("Testing OC-SIREN with concatenation-only time conditioning...")
+    """Run tests for the Dynamical SIREN network."""
+    print("Testing Dynamical SIREN with concatenation-only time conditioning...")
     
     # Network parameters
     input_dim = 2
@@ -388,7 +388,7 @@ def _test():
     for name, config in configs.items():
         print(f"\n--- Testing: {name} ---")
         
-        model = OCSIREN(
+        model = DynamicalSIREN(
             input_dim=input_dim,
             hidden_dim=hidden_dim,
             output_dim=output_dim,

@@ -1,4 +1,4 @@
-_target_: src.models.modelmodule.OCINRTraining
+_target_: src.models.modelmodule.DINRTraining
 
 optimizer:
   _target_: torch.optim.AdamW
@@ -17,19 +17,18 @@ criterion:
   _target_: torch.nn.MSELoss
 
 net:
-  _target_: src.models.components.OC_FFNet.OCFourierFeatureNetwork
+  _target_: src.models.components.Dynamical_SIRENNet.DynamicalSIREN
   input_dim: 2
-  mapping_size: 256
-  hidden_dim: 256
+  hidden_dim: 192
   output_dim: 1
   num_layers: 3
-  dropout_rate: 0.5
-  activation: "GELU"
+  omega_0: 15.0
+  omega_0_hidden: 15.0
+  dropout_rate: 0.0
   block_type: "residual"
   num_steps: 12
   total_time: 1.0
-  ot_lambda: 0.001
-  sigma: 10.0
+  ot_lambda: 0.1
   final_activation: null
 
 compile: false
@@ -39,7 +38,7 @@ ntk_frequency: 2
 ntk_top_k: 10
 ntk_normalize: "trace"
 
-checkpoint_epochs: [0, 50, 100, 150, 200, 250, 300]
+checkpoint_epochs: []
 
 ablation_ot_loss: false
 ablation_noise: false

@@ -1,104 +1,234 @@
-# OC-INR: Optimal Control Implicit Neural Representations
+# DINR: Dynamical Implicit Neural Representations
 
-A PyTorch Lightning implementation of optimal control-regularized implicit neural representations (INRs) for learning continuous function approximations from discrete data. This repository implements both standard INR architectures and their optimal control (OC) variants with transport regularization.
+[![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
+[![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg)](https://pytorch.org/)
+[![Lightning](https://img.shields.io/badge/Lightning-2.0+-792ee5.svg)](https://lightning.ai/)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-## 🚀 Features
+This is the offical PyTorch implementation of **DINR**  Dynamical Implicit Neural Representations for learning continuous representations of complex scientific data.
 
-- **Multiple INR Architectures**:
-  - **FFNet**: Random Fourier feature mappings for high-frequency learning
-  - **SIREN**: Sinusoidal representation networks with periodic activations  
-  - **OC-FFNet**: Optimal control variant of Fourier Feature Networks with transport regularization
-  - **OC-SIREN**: Optimal control variant of SIREN networks
+---
 
-- **Optimal Transport Regularization**: ODE-based dynamics with transport cost minimization for improved training stability and generalization
+## 📋 Table of Contents
 
-## 📋 Requirements
+- [Installation](#-installation)
+- [Quick Start](#-quick-start)
+- [Project Structure](#-project-structure)
+- [Configuration](#️-configuration)
+- [Usage](#-usage)
+- [Models](#-models)
+- [Advanced Features](#-advanced-features)
+- [Contributing](#-contributing)
+- [Citation](#-citation)
+- [License](#-license)
 
-Based on the codebase analysis, the following dependencies are required:
+---
 
+## 🔧 Installation
+
+### Prerequisites
+
+- Python 3.12+
+- CUDA 11.8+ (for GPU support)
+- conda or mamba (recommended for environment management)
+
+### Setup
+
+1. **Clone the repository**
+   ```bash
+   git clone https://github.com/yourusername/DINR.git
+   cd DINR
+   ```
+
+2. **Create conda environment**
+   ```bash
+   conda env create -f environment.yml
+   conda activate DINR
+   ```
+
+3. **Prepare data**
+   Place your `.npy` data files in the `data/` directory:
+   ```
+   data/
+   ├── turbulence_1024.npy
+   ├── ctbl3d.npy
+   ├── water_vapor.npy
+   └── emd_32218.npy
+   ```
+
+---
+
+## 🚀 Quick Start
+
+### Basic Training
+
+Train a Fourier Feature Network on turbulence data:
 ```bash
-# Core ML framework
-torch>=1.9.0
-lightning>=2.0.0
-torchmetrics
-
-# Configuration and utilities  
-hydra-core>=1.3.0
-omegaconf
-rootutils
-
-# Data processing and visualization
-numpy
-matplotlib
-scienceplots
-pandas
-
-# Logging
-wandb  # for experiment tracking
-lightning-utilities
+python src/train.py data=turbulence model=FFNet
 ```
 
-## 🛠️ Installation
-
-1. **Clone the repository**:
+Train a Dynamical FFNet:
 ```bash
-git clone https://github.com/your-username/OCINR.git
-cd OCINR
+python src/train.py data=turbulence model=DynamicalFFNet
 ```
 
-2. **Install dependencies**:
+### Run All Experiments
+
+Use the provided script to train all model variants:
 ```bash
-pip install torch lightning torchmetrics hydra-core omegaconf rootutils numpy matplotlib scienceplots pandas wandb lightning-utilities
+bash scripts/run.sh
 ```
 
-3. **Set up the project root**:
+### Evaluation
+
+Evaluate a trained model:
 ```bash
-export PROJECT_ROOT=$(pwd)
+python src/eval.py \
+  data=turbulence \
+  model=FFNet \
+  ckpt_path=logs/ntk/FFNet/checkpoints/best.ckpt
 ```
 
-## 📊 Dataset
+---
 
-The project uses four scientific datasets:
+## 📁 Project Structure
 
-- **Turbulence Data**: `data/turbulence_1024.npy` - 1024×1024 turbulence field
-- **Time Projection Chamber Data**: 
-- **Cryo-EM Data**:
-- **Black Sea Data**:
-- **ERA5 Data**:
-
-## 🎯 Quick Start
-
-### Training Models
-
-Train different INR architectures using the provided scripts:
-
-```bash
-# Train standard Fourier Feature Network
-python src/train.py model=FFNet
-
-# Train SIREN network
-python src/train.py model=SIREN
-
-# Train OC-Fourier Feature Network  
-python src/train.py model=OCFFNet
-
-# Train OC-SIREN network
-python src/train.py model=OCSIREN
 ```
+DINR/
+├── configs/                    # Hydra configuration files
+│   ├── callbacks/             # Training callbacks (checkpointing, early stopping)
+│   ├── data/                  # Dataset configurations
+│   ├── model/                 # Model architecture configs
+│   │   ├── FFNet.yaml
+│   │   ├── SIREN.yaml
+│   │   ├── DynamicalFFNet.yaml
+│   │   └── DynamicalSIREN.yaml
+│   ├── trainer/               # PyTorch Lightning trainer configs
+│   ├── logger/                # Logging configurations (W&B)
+│   ├── train.yaml             # Main training configuration
+│   └── eval.yaml              # Evaluation configuration
+│
+├── data/                       # Data directory (*.npy files, gitignored)
+│   ├── turbulence_1024.npy
+│   ├── ctbl3d.npy
+│   └── ...
+│
+├── src/                        # Source code
+│   ├── data/
+│   │   └── datamodule.py      # Lightning DataModule with NTK subset support
+│   ├── models/
+│   │   ├── components/        # Model architectures
+│   │   │   ├── FFNet.py              # Fourier Feature Network
+│   │   │   ├── SIRENNet.py           # SIREN Network
+│   │   │   ├── Dynamical_FFNet.py    # OC-FFNet
+│   │   │   └── Dynamical_SIRENNet.py # OC-SIREN
+│   │   └── modelmodule.py     # Lightning modules (INRTraining, DINRTraining)
+│   ├── utils/
+│   │   ├── ntk.py             # Neural Tangent Kernel analysis
+│   │   ├── metrics.py         # Loss and error metrics
+│   │   ├── viz.py             # Visualization utilities
+│   │   └── ...                # Various utilities
+│   ├── train.py               # Training entry point
+│   └── eval.py                # Evaluation entry point
+│
+├── scripts/
+│   └── run.sh                 # Batch training script
+│
+├── logs/                       # Training outputs (gitignored)
+│   └── ntk/                   # Organized by experiment name
+│
+├── environment.yml             # Conda environment specification
+├── .gitignore
+├── .project-root              # Root marker for rootutils
+└── README.md
+```
+
+---
+
+## ⚙️ Configuration
+
+DINR uses [Hydra](https://hydra.cc/) for configuration management. All configurations are in the `configs/` directory.
+
+### Key Configuration Files
+
+#### Model Configuration (`configs/model/`)
+
+**FFNet.yaml** - Traditional Fourier Feature Network
+```yaml
+net:
+  _target_: src.models.components.FFNet.FourierFeatureNetwork
+  input_dim: 2
+  mapping_size: 256      # Fourier feature dimension
+  hidden_dim: 256
+  num_layers: 5
+  output_dim: 1
+  sigma: 10.0           # Fourier feature scale
+  dropout_rate: 0.1
+  activation: "GELU"
+  use_residual: true
+```
+
+**DynamicalFFNet.yaml** - Dynamical FFNet
+```yaml
+net:
+  _target_: src.models.components.Dynamical_FFNet.DynamicalFourierFeatureNetwork
+  input_dim: 2
+  mapping_size: 256
+  hidden_dim: 256
+  num_layers: 3          # ODE function layers
+  num_steps: 12          # ODE integration steps
+  total_time: 1.0        # Integration time horizon
+  ot_lambda: 0.1         # Optimal transport weight
+  block_type: "residual"
+```
+
+#### Data Configuration (`configs/data/turbulence.yaml`)
+
+```yaml
+_target_: src.data.datamodule.DataModule
+data_dir: ${paths.data_dir}turbulence_1024.npy
+in_features: 2
+normalization: min-max
+data_shape: [1024, 1024]
+batch_size: [65536, 65536, 65536]  # [train, val, test]
+ntk_subset_mode: subgrid           # NTK coordinate sampling
+ntk_subgrid_g: 32                  # NTK grid resolution
+generalization_test: false
+```
+
+---
+
+## 📖 Citation
+
+If you use this code in your research, please cite:
+
+```bibtex
+@software{dinr2025,
+  title={coming soon}
+}
+```
+
+---
+
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License.
 
-## 📚 References
-
-- **SIREN**: [Implicit Neural Representations with Periodic Activation Functions](https://arxiv.org/abs/2006.09661)
-- **Fourier Features**: [Fourier Features Let Networks Learn High Frequency Functions in Low Dimensional Domains](https://arxiv.org/abs/2006.10739)
-- **Optimal Control**: [Optimal Control for Transformer Architectures: Enhancing Generalization, Robustness and Efficiency](https://arxiv.org/abs/2505.13499)
+---
 
 ## 🙏 Acknowledgments
 
-Built with:
-- [PyTorch Lightning](https://pytorch-lightning.readthedocs.io/) - Training framework
-- [Hydra](https://hydra.cc/) - Configuration management  
-- [Weights & Biases](https://wandb.ai/) - Experiment tracking
-- [Lightning-Hydra-Template](https://github.com/ashleve/lightning-hydra-template) - Project template
+- PyTorch Lightning team for the excellent training framework
+- Hydra team for flexible configuration management
+- Authors of FFNet and SIREN for foundational INR architectures
+- The neural ODE community for continuous-depth architecture inspiration
+
+---
+
+## 📞 Contact
+
+- **Email**: xluo@bnl.gov
+
+---
+
+**Note**: This project is under active development. Star ⭐ the repository to stay updated!
