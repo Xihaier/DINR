@@ -1,5 +1,5 @@
 """
-Implementation of OC-SIREN
+Implementation of Dynamical SIREN
 """
 
 from typing import Optional, Tuple, Literal

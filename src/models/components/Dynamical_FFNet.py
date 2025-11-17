@@ -1,5 +1,5 @@
 """
-Implementation of OC-FFNet
+Implementation of Dynamical FFNet
 """
 
 from typing import Optional, Tuple, Literal

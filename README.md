@@ -44,13 +44,6 @@ This is the offical PyTorch implementation of **DINR**  Dynamical Implicit Neura
 
 3. **Prepare data**
    Place your `.npy` data files in the `data/` directory:
-   ```
-   data/
-   ├── turbulence_1024.npy
-   ├── ctbl3d.npy
-   ├── water_vapor.npy
-   └── emd_32218.npy
-   ```
 
 ---
 
