@@ -32,7 +32,7 @@ This is the offical PyTorch implementation of **DINR**  Dynamical Implicit Neura
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/yourusername/DINR.git
+   git clone https://github.com/Xihaier/DINR.git
    cd DINR
    ```
 
@@ -41,9 +41,6 @@ This is the offical PyTorch implementation of **DINR**  Dynamical Implicit Neura
    conda env create -f environment.yml
    conda activate DINR
    ```
-
-3. **Prepare data**
-   Place your `.npy` data files in the `data/` directory:
 
 ---
 
