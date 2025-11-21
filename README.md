@@ -26,7 +26,7 @@ This is the offical PyTorch implementation of **DINR**  Dynamical Implicit Neura
 
 - Python 3.12+
 - CUDA 11.8+ (for GPU support)
-- conda or mamba (recommended for environment management)
+- conda (recommended for environment management)
 
 ### Setup
 
