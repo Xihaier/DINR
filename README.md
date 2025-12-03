@@ -189,8 +189,11 @@ generalization_test: false
 If you use this code in your research, please cite:
 
 ```bibtex
-@software{dinr2025,
-  title={coming soon}
+@article{park2025dynamical,
+  title={Dynamical Implicit Neural Representations},
+  author={Park, Yesom and Kan, Kelvin and Flynn, Thomas and Huang, Yi and Yoo, Shinjae and Osher, Stanley and Luo, Xihaier},
+  journal={arXiv preprint arXiv:2511.21787},
+  year={2025}
 }
 ```
 
